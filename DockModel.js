@@ -652,8 +652,12 @@ function normalizeKey(str) {
 function extractChromeDomain(appClass) {
     if (!appClass) return "";
     var s = String(appClass).toLowerCase();
-    if (s.indexOf("chrome-") === 0 || s.indexOf("chromium-") === 0 || s.indexOf("brave-") === 0 || s.indexOf("edge-") === 0) {
-        var dom = s.replace(/^(chrome|chromium|brave|edge)-/, "")
+    // Edge names its web apps "msedge-<domain>__<path>", which the original
+    // prefix list missed - so an Edge web app resolved no domain, matched no
+    // desktop entry, and fell back to the generic executable icon.
+    if (s.indexOf("chrome-") === 0 || s.indexOf("chromium-") === 0 || s.indexOf("brave-") === 0
+        || s.indexOf("edge-") === 0 || s.indexOf("msedge-") === 0 || s.indexOf("vivaldi-") === 0) {
+        var dom = s.replace(/^(chrome|chromium|brave|msedge|edge|vivaldi)-/, "")
                    .replace(/__-.*$/, "")
                    .replace(/__.*$/, "")
                    .replace(/_\/.*$/, "")
