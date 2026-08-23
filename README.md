@@ -74,6 +74,7 @@ You can customize options directly via the `···` status bar widget or in `~/.
     "omarchy.apps"
   ],
   "disabledMonitors": [],
+  "excludeUndockedMonitors": true,
   "groupByWorkspace": false,
   "showEmptyWorkspaces": true,
   "paddedWorkspaceCount": 5,
@@ -86,9 +87,12 @@ You can customize options directly via the `···` status bar widget or in `~/.
 
 `disabledMonitors` lists monitors — by the names Hyprland reports, e.g. `eDP-1` — that should not show a dock. `dockEnabled` remains the master switch across every screen; this subtracts individual ones from it. Unknown names are inert, so unplugging a display never leaves a dock switched off with no way to reach the setting.
 
+`excludeUndockedMonitors` (default `true`) keeps the rails in agreement with that: a screen with no dock contributes no windows to the docks that remain. Turning the dock off for a monitor and still seeing its windows listed on another screen's dock reads as a bug — and unlike naming the monitor in `excludeMonitors`, this corrects itself the moment that dock is switched back on. Set it to `false` if you want one dock to stay a view of everything running, including screens you gave no dock to.
+
 ```bash
 omarchy-shell rosakodu.dock setMonitorEnabled eDP-1:false   # off for one screen
 omarchy-shell rosakodu.dock toggleMonitor                   # flip the focused screen
+omarchy-shell rosakodu.dock setExcludeUndockedMonitors false
 ```
 
 ### Workspace grouping

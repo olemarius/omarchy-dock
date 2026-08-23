@@ -185,6 +185,10 @@ Item {
             return "ok"
         }
         function toggleMonitor(): string { root.toggleFocusedMonitor(); return "ok" }
+        function setExcludeUndockedMonitors(val: string): string {
+            root.setExcludeUndockedMonitors(val === "true" || val === "1")
+            return "ok"
+        }
         function listMonitors(): string {
             var out = []
             var mons = (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values : []
@@ -376,6 +380,12 @@ Item {
     // opt-in, so a newly connected screen gets a dock without being configured
     // first, and an unknown name here is simply inert.
     property var disabledMonitors: []
+    // A screen with no dock contributes no windows to the rails that remain.
+    // Turning the dock off for a monitor and still seeing its windows listed
+    // on another screen's dock reads as a bug; this keeps the two answers in
+    // agreement, and unlike a hand-written excludeMonitors entry it corrects
+    // itself the moment that dock is switched back on.
+    property bool excludeUndockedMonitors: true
     // Spanning workspaces. Hyprland cannot put one workspace on two monitors,
     // so multi-monitor setups pair them by offset: workspace 2 on the main
     // screen and 12 on the second are two halves of one idea. Set this to that
@@ -613,6 +623,9 @@ Item {
                 if (s.disabledMonitors !== undefined && Array.isArray(s.disabledMonitors)) {
                     root.disabledMonitors = s.disabledMonitors
                 }
+                if (s.excludeUndockedMonitors !== undefined) {
+                    root.excludeUndockedMonitors = (s.excludeUndockedMonitors === true)
+                }
                 if (s.workspaceStride !== undefined) {
                     var stride = parseInt(s.workspaceStride, 10)
                     if (!isNaN(stride) && stride >= 0 && stride <= 100) root.workspaceStride = stride
@@ -658,6 +671,7 @@ Item {
             workspaceScope: root.workspaceScope || "all",
             excludeMonitors: root.excludeMonitors || [],
             disabledMonitors: root.disabledMonitors || [],
+            excludeUndockedMonitors: root.excludeUndockedMonitors,
             workspaceStride: root.workspaceStride,
             widgetsEnabled: root.widgetsEnabled,
             appMenuPosition: root.appMenuPosition || "left",
@@ -1024,6 +1038,7 @@ Item {
         if (!enabled) next.push(name)
         root.disabledMonitors = next
         root.saveSettings()
+        root.updateDockItems()
     }
 
     function isMonitorEnabled(monitorName) {
@@ -1037,6 +1052,30 @@ Item {
         var name = root.focusedScreenName()
         if (!name) return
         root.setMonitorEnabled(name, !root.isMonitorEnabled(name))
+    }
+
+    // Monitors whose workspaces no rail should show: the ones named outright,
+    // plus - while excludeUndockedMonitors is on - every screen the dock is
+    // switched off for.
+    readonly property var effectiveExcludedMonitors: {
+        var out = []
+        for (var i = 0; i < root.excludeMonitors.length; i++) out.push(String(root.excludeMonitors[i]))
+        if (root.excludeUndockedMonitors) {
+            for (var j = 0; j < root.disabledMonitors.length; j++) {
+                var name = String(root.disabledMonitors[j])
+                if (out.indexOf(name) === -1) out.push(name)
+            }
+        }
+        return out
+    }
+
+    onDisabledMonitorsChanged: root.updateDockItems()
+    onExcludeUndockedMonitorsChanged: root.updateDockItems()
+
+    function setExcludeUndockedMonitors(val) {
+        root.excludeUndockedMonitors = (val === true)
+        root.saveSettings()
+        root.updateDockItems()
     }
 
     function setExcludeMonitors(raw) {
@@ -1651,7 +1690,7 @@ Item {
                     maxEmptyPlates: root.maxEmptyWorkspaces,
                     padTo: root.paddedWorkspaceCount,
                     monitorName: (root.workspaceScope === "monitor") ? view.dockMonitorName : "",
-                    excludeMonitors: root.excludeMonitors,
+                    excludeMonitors: root.effectiveExcludedMonitors,
                     stride: root.workspaceStride,
                     screenCount: (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values.length : 1,
                     maxItemsPerGroup: 0
