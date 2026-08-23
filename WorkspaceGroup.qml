@@ -26,6 +26,8 @@ Item {
     property bool showLabel: true
     // True while a tile is being dragged over this plate, so the drop target
     // is obvious before the user lets go.
+    // True when this plate is the workspace the dock's own screen is showing.
+    property bool isCurrent: false
     property bool isDropTarget: false
     // True while a tile *of this plate* is being dragged. The plate lifts out
     // of the rail so the travelling tile is not painted under its neighbours.
@@ -85,12 +87,16 @@ Item {
         color: {
             if (root.isDropTarget) return Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.32)
             if (root.isUrgent) return Qt.rgba(Color.urgent.r, Color.urgent.g, Color.urgent.b, 0.22)
-            if (root.isFocused) return Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.20)
-            if (root.isActive) return Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.11)
+            // What this screen is showing reads strongest. A workspace that is
+            // up on some *other* screen still gets a hint, so a rail covering
+            // every workspace says where things are without competing with the
+            // one in front of you.
+            if (root.isCurrent) return Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.20)
+            if (root.isActive) return Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.09)
             if (plateMouse.containsMouse) return Util.alpha(Color.foreground, 0.10)
             return Util.alpha(Color.foreground, root.isEmpty ? 0.03 : 0.06)
         }
-        border.width: (root.isFocused || root.isDropTarget) ? root.systemBorderSize : 0
+        border.width: (root.isCurrent || root.isDropTarget) ? root.systemBorderSize : 0
         border.color: root.isUrgent ? Color.urgent : Color.accent
 
         Behavior on color { ColorAnimation { duration: 180; easing.type: Easing.OutCubic } }
@@ -110,8 +116,8 @@ Item {
             visible: root.showLabel
             text: root.label
             font: labelMetrics.font
-            color: root.isFocused || root.isActive ? Color.accent : Color.bar.text
-            opacity: root.isFocused ? 1.0 : (root.isActive ? 0.85 : (root.isEmpty ? 0.45 : 0.7))
+            color: root.isCurrent || root.isActive ? Color.accent : Color.bar.text
+            opacity: root.isCurrent ? 1.0 : (root.isActive ? 0.85 : (root.isEmpty ? 0.45 : 0.7))
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
 

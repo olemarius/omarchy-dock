@@ -1663,6 +1663,33 @@ Item {
             return last
         }
 
+        // The workspace this screen is currently displaying. Read from the
+        // monitor rather than from the workspace list: the monitor's
+        // activeWorkspace tracks the compositor exactly, while a workspace's
+        // own monitor goes stale after a switch.
+        readonly property int currentWorkspaceId: {
+            var name = view.dockScreen ? String(view.dockScreen.name || "") : ""
+            if (!name) return -1
+            var monitors = (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values : []
+            for (var i = 0; i < monitors.length; i++) {
+                if (String(monitors[i].name || "") !== name) continue
+                var active = monitors[i].activeWorkspace
+                return active ? Number(active.id) : -1
+            }
+            return -1
+        }
+
+        // Which plate that workspace belongs to. Bound rather than baked into
+        // the model, so the highlight follows a switch immediately instead of
+        // waiting for the next rebuild.
+        readonly property int currentPlateId: {
+            var id = view.currentWorkspaceId
+            if (!isFinite(id) || id < 1) return -1
+            var stride = root.workspaceStride
+            if (stride > 0) return ((id - 1) % stride) + 1
+            return id
+        }
+
         readonly property int maxDockItems: root.itemCapacityFor(view.logicalScreenWidth, view.logicalScreenHeight)
         readonly property var visibleDockItems: root.dockItems.slice(0, view.maxDockItems)
 
@@ -2477,7 +2504,7 @@ Item {
                                 // allowance. The workspace being looked at is
                                 // never hidden, however empty.
                                 visible: !modelData.isEmpty
-                                    || modelData.isActive || modelData.isFocused
+                                    || view.currentPlateId === Number(modelData.workspaceId)
                                     || (view.isWorkspaceDragging
                                         && Number(modelData.workspaceId) <= view.lastOccupiedPlate + 1)
                                     || (!view.isWorkspaceDragging && root.emptyPlateAllowance < 0)
@@ -2494,6 +2521,13 @@ Item {
                                 systemBorderSize: root.systemBorderSize
                                 systemRounding: root.systemRounding
                                 showBadges: root.showBadges
+                                // Highlight what this screen is showing, not
+                                // what has keyboard focus: with a dock per
+                                // monitor, "focused" would light the same plate
+                                // on every screen and say nothing about what is
+                                // in front of you.
+                                isCurrent: view.currentPlateId === Number(modelData.workspaceId)
+
                                 isDropTarget: view.workspaceDropTargetId > 0
                                     && view.workspaceDropTargetId === Number(modelData.workspaceId)
 
