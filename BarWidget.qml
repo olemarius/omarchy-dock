@@ -32,6 +32,7 @@ BarWidget {
   // 0 = one plate per workspace, >0 = plates span paired workspaces across
   // monitors (the offset between a screen's workspaces, conventionally 10).
   property int workspaceStride: 0
+  property string workspaceScope: "all"
   property bool groupAppInstances: true
   readonly property int spanningStride: 10
   property bool widgetsEnabled: true
@@ -98,6 +99,9 @@ BarWidget {
         }
         if (s && s.groupAppInstances !== undefined) {
           root.groupAppInstances = (s.groupAppInstances === true)
+        }
+        if (s && s.workspaceScope !== undefined) {
+          root.workspaceScope = (s.workspaceScope === "monitor") ? "monitor" : "all"
         }
         if (s && s.workspaceStride !== undefined) {
           var stride = parseInt(s.workspaceStride, 10)
@@ -202,6 +206,23 @@ BarWidget {
     root.groupAppInstances = val
     if (root.bar && typeof root.bar.run === "function") {
       root.bar.run("omarchy-shell rosakodu.dock setGroupAppInstances " + (val ? "true" : "false"))
+    } else {
+      saveSettings()
+    }
+  }
+
+  // Mode picks which workspaces a dock lists. That is the scope, not the block
+  // offset: the offset describes how the compositor numbers each screen's
+  // workspaces and applies either way. Setting it alongside keeps the plates
+  // numbered 1..n on both screens rather than 11..15 on the second.
+  function setWorkspaceScope(scope) {
+    root.workspaceScope = scope
+    if (root.bar && typeof root.bar.run === "function") {
+      root.bar.run("omarchy-shell rosakodu.dock setWorkspaceScope " + scope)
+      if (root.workspaceStride <= 0) {
+        root.workspaceStride = root.spanningStride
+        root.bar.run("omarchy-shell rosakodu.dock setWorkspaceStride " + root.spanningStride)
+      }
     } else {
       saveSettings()
     }
@@ -819,7 +840,7 @@ BarWidget {
               }
 
               Text {
-                text: "Which screens one plate covers"
+                text: "Which workspaces this dock lists"
                 font.family: Style.font.family
                 font.pixelSize: 10
                 color: Color.muted
@@ -834,14 +855,14 @@ BarWidget {
 
               Repeater {
                 model: [
-                  { label: "Single monitor", stride: 0 },
-                  { label: "All monitors", stride: root.spanningStride }
+                  { label: "This screen", scope: "monitor" },
+                  { label: "All screens", scope: "all" }
                 ]
 
                 Rectangle {
                   required property var modelData
 
-                  readonly property bool selected: root.workspaceStride === modelData.stride
+                  readonly property bool selected: root.workspaceScope === modelData.scope
 
                   Layout.fillWidth: true
                   Layout.preferredHeight: 26
@@ -867,7 +888,7 @@ BarWidget {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.setWorkspaceStride(modelData.stride)
+                    onClicked: root.setWorkspaceScope(modelData.scope)
                   }
                 }
               }
