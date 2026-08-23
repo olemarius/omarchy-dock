@@ -229,6 +229,9 @@ function platesToRender(workspaces, options) {
     var list = toArray(workspaces);
     var ids = [];
     var members = {};
+    // Workspaces the compositor actually reported. Their monitor is known for
+    // certain; anything outside this set has to be judged some other way.
+    var seen = {};
     // Real workspace ids dropped by a filter, so their windows can be kept off
     // the rail without also excluding windows on workspaces the compositor
     // simply has not told us about yet.
@@ -246,6 +249,7 @@ function platesToRender(workspaces, options) {
 
         var plate = plateIdFor(id, stride, plateCount);
         if (plate < 1) continue;
+        seen[id] = true;
 
         var mon = safeGet(ws, "monitor", null);
         var monName = mon ? String(safeGet(mon, "name", "")) : "";
@@ -275,7 +279,7 @@ function platesToRender(workspaces, options) {
     }
 
     ids.sort(function (a, b) { return a - b; });
-    return { ids: ids, members: members, filtered: filtered, stride: stride, plateCount: plateCount };
+    return { ids: ids, members: members, filtered: filtered, seen: seen, stride: stride, plateCount: plateCount };
 }
 
 // The real workspaces a plate stands for, whether or not the compositor has
@@ -344,10 +348,21 @@ function buildWorkspaceGroups(hyprToplevels, workspaces, knownWindows, activeTop
         var wsId = index.workspaceId[pos];
         if (!isNormalWorkspaceId(wsId)) continue;
         if (!showPinned && index.pinned[pos]) continue;
-        var winMonitor = index.monitorName[pos];
-        if (isExcludedMonitor(excludedMonitors, winMonitor)) continue;
-        if (scopedMonitor && winMonitor && winMonitor !== scopedMonitor) continue;
-        if (rendered.filtered[wsId]) continue;
+
+        // Which screen a window is on is decided by its workspace, which the
+        // compositor pins deliberately. A toplevel's own monitor is not a
+        // reliable stand-in - it can report the focused screen rather than the
+        // one the window is displayed on, which made every window vanish from
+        // the rail whenever focus sat on an excluded monitor. So the window's
+        // monitor is consulted only for workspaces the compositor has not
+        // reported, where nothing better exists.
+        if (rendered.seen[wsId]) {
+            if (rendered.filtered[wsId]) continue;
+        } else {
+            var winMonitor = index.monitorName[pos];
+            if (isExcludedMonitor(excludedMonitors, winMonitor)) continue;
+            if (scopedMonitor && winMonitor && winMonitor !== scopedMonitor) continue;
+        }
         var bucketPlate = plateIdFor(wsId, rendered.stride, rendered.plateCount);
         if (bucketPlate < 1) continue;
         if (!buckets[bucketPlate]) buckets[bucketPlate] = [];
