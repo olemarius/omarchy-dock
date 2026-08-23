@@ -24,9 +24,18 @@ Item {
     property int systemRounding: Style.cornerRadius > 0 ? Style.cornerRadius : 12
     property bool showBadges: true
     property bool showLabel: true
+    // True while a tile is being dragged over this plate, so the drop target
+    // is obvious before the user lets go.
+    property bool isDropTarget: false
+    // True while a tile *of this plate* is being dragged. The plate lifts out
+    // of the rail so the travelling tile is not painted under its neighbours.
+    property bool isDragSource: false
 
     signal workspaceActivated(var groupData)
     signal itemLaunched(string appId)
+    signal itemDragMoved(var itemData, int sourceWorkspaceId, real sceneX, real sceneY)
+    signal itemDragDropped(var itemData, int sourceWorkspaceId, real sceneX, real sceneY)
+    signal itemDragCanceled()
 
     readonly property bool isVertical: barPosition === "left" || barPosition === "right"
     readonly property var items: (groupData && groupData.items) ? groupData.items : []
@@ -53,6 +62,7 @@ Item {
     implicitHeight: root.isVertical ? root.plateExtent : root.slotSize
     width: implicitWidth
     height: implicitHeight
+    z: root.isDragSource ? 100 : 0
 
     TextMetrics {
         id: labelMetrics
@@ -73,13 +83,14 @@ Item {
         // the focused one additionally takes the accent border, so "where am
         // I" stays readable at a glance on a multi-monitor setup.
         color: {
+            if (root.isDropTarget) return Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.32)
             if (root.isUrgent) return Qt.rgba(Color.urgent.r, Color.urgent.g, Color.urgent.b, 0.22)
             if (root.isFocused) return Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.20)
             if (root.isActive) return Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.11)
             if (plateMouse.containsMouse) return Util.alpha(Color.foreground, 0.10)
             return Util.alpha(Color.foreground, root.isEmpty ? 0.03 : 0.06)
         }
-        border.width: root.isFocused ? root.systemBorderSize : 0
+        border.width: (root.isFocused || root.isDropTarget) ? root.systemBorderSize : 0
         border.color: root.isUrgent ? Color.urgent : Color.accent
 
         Behavior on color { ColorAnimation { duration: 180; easing.type: Easing.OutCubic } }
@@ -139,12 +150,25 @@ Item {
             // nothing to persist, so dragging and edit mode stay off here.
             draggable: false
             isEditMode: false
+            dragToWorkspace: true
 
             x: root.isVertical ? 0 : (root.padLead + root.labelSlot + index * root.slotSize)
             y: root.isVertical ? (root.padLead + root.labelSlot + index * root.slotSize) : 0
             z: 2
 
             onOriginalAppLaunched: function(appId) { root.itemLaunched(appId) }
+            onWorkspaceDragMoved: function(sceneX, sceneY) {
+                root.isDragSource = true
+                root.itemDragMoved(modelData, root.groupData ? root.groupData.workspaceId : -1, sceneX, sceneY)
+            }
+            onWorkspaceDragDropped: function(sceneX, sceneY) {
+                root.isDragSource = false
+                root.itemDragDropped(modelData, root.groupData ? root.groupData.workspaceId : -1, sceneX, sceneY)
+            }
+            onWorkspaceDragCanceled: {
+                root.isDragSource = false
+                root.itemDragCanceled()
+            }
         }
     }
 }

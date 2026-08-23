@@ -950,6 +950,61 @@ Item {
             })
     }
 
+    // Workspace id currently under a dragged tile, or -1. Drives the plate
+    // highlight and is the drop target when the pointer is released.
+    property int workspaceDropTargetId: -1
+
+    // Which plate sits under a point in window coordinates. The rail's plates
+    // are the only children carrying groupData, so the Repeater itself and any
+    // future siblings are skipped rather than mis-hit.
+    function workspaceGroupAt(sceneX, sceneY) {
+        var kids = workspaceRail.children
+        for (var i = 0; i < kids.length; i++) {
+            var candidate = kids[i]
+            if (!candidate || candidate.groupData === undefined || candidate.groupData === null) continue
+            var local = candidate.mapFromItem(null, sceneX, sceneY)
+            if (local.x >= 0 && local.y >= 0 && local.x < candidate.width && local.y < candidate.height)
+                return candidate
+        }
+        return null
+    }
+
+    function updateWorkspaceDropTarget(sceneX, sceneY) {
+        var group = root.workspaceGroupAt(sceneX, sceneY)
+        var id = (group && group.groupData) ? Number(group.groupData.workspaceId) : -1
+        root.workspaceDropTargetId = isFinite(id) ? id : -1
+    }
+
+    function finishWorkspaceDrag(itemData, sourceWorkspaceId, sceneX, sceneY) {
+        var target = root.workspaceDropTargetId
+        root.workspaceDropTargetId = -1
+        if (!itemData || target <= 0) return
+        if (target === Number(sourceWorkspaceId)) return
+        root.moveItemToWorkspace(itemData, target)
+    }
+
+    // A tile stands for "this application on this workspace", so dragging it
+    // moves every window it represents. `follow = false` keeps the gesture an
+    // organising one: the windows move, the user stays where they are.
+    function moveItemToWorkspace(itemData, workspaceId) {
+        var addresses = (itemData && itemData.addresses) ? itemData.addresses : []
+        var moved = 0
+        for (var i = 0; i < addresses.length; i++) {
+            var address = String(addresses[i] || "")
+            if (!address) continue
+            if (Hyprland.usingLua === true) {
+                Hyprland.dispatch("hl.dsp.window.move({ window = \"address:" + address
+                    + "\", workspace = \"" + workspaceId + "\", follow = false })")
+            } else {
+                Hyprland.dispatch("movetoworkspacesilent " + workspaceId + ",address:" + address)
+            }
+            moved++
+        }
+        if (moved === 0) return
+        try { Hyprland.refreshToplevels() } catch (e) {}
+        root.updateDockItems()
+    }
+
     // Switching workspace goes through the compositor object when Hyprland
     // knows the workspace, and falls back to a dispatch for a padded workspace
     // that has never been opened and therefore has no object yet.
@@ -1984,63 +2039,46 @@ Item {
                 // how many applications a workspace holds, and itemsWidth reads
                 // the measured extent back so separators and the right-hand
                 // widgets keep lining up.
-                Loader {
+                Grid {
                     id: workspaceRail
-                    active: root.groupByWorkspace
                     visible: root.groupByWorkspace
                     readonly property real railBaseOffset: (root.hasLeftWidgets ? (root.leftWidgetsWidth + root.leftSeparatorSize) : 0)
                     x: root.isVertical ? 0 : railBaseOffset
                     y: root.isVertical ? railBaseOffset : 0
                     z: 1
-                    sourceComponent: root.isVertical ? verticalRailComponent : horizontalRailComponent
-                }
+                    spacing: root.workspaceGroupGap
+                    // One row along a horizontal dock, one column along a
+                    // vertical one - the same positioner serves both.
+                    columns: root.isVertical ? 1 : Math.max(1, root.workspaceGroups.length)
 
-                Component {
-                    id: horizontalRailComponent
-                    Row {
-                        spacing: root.workspaceGroupGap
-                        Repeater {
-                            model: root.workspaceGroups
-                            WorkspaceGroup {
-                                required property var modelData
-                                groupData: modelData
-                                barPosition: root.barPosition
-                                shell: root.shell
-                                slotSize: root.slotSize
-                                iconBaseSize: root.iconBaseSize
-                                iconRevision: root.iconRevision
-                                iconsReady: root.iconsReady
-                                systemBorderSize: root.systemBorderSize
-                                systemRounding: root.systemRounding
-                                showBadges: root.showBadges
-                                onWorkspaceActivated: function(group) { root.activateWorkspace(group) }
-                                onItemLaunched: function(appId) { root.requestFocusOnLaunch(appId) }
-                            }
-                        }
-                    }
-                }
+                    Repeater {
+                        model: root.groupByWorkspace ? root.workspaceGroups : []
 
-                Component {
-                    id: verticalRailComponent
-                    Column {
-                        spacing: root.workspaceGroupGap
-                        Repeater {
-                            model: root.workspaceGroups
-                            WorkspaceGroup {
-                                required property var modelData
-                                groupData: modelData
-                                barPosition: root.barPosition
-                                shell: root.shell
-                                slotSize: root.slotSize
-                                iconBaseSize: root.iconBaseSize
-                                iconRevision: root.iconRevision
-                                iconsReady: root.iconsReady
-                                systemBorderSize: root.systemBorderSize
-                                systemRounding: root.systemRounding
-                                showBadges: root.showBadges
-                                onWorkspaceActivated: function(group) { root.activateWorkspace(group) }
-                                onItemLaunched: function(appId) { root.requestFocusOnLaunch(appId) }
+                        WorkspaceGroup {
+                            required property var modelData
+
+                            groupData: modelData
+                            barPosition: root.barPosition
+                            shell: root.shell
+                            slotSize: root.slotSize
+                            iconBaseSize: root.iconBaseSize
+                            iconRevision: root.iconRevision
+                            iconsReady: root.iconsReady
+                            systemBorderSize: root.systemBorderSize
+                            systemRounding: root.systemRounding
+                            showBadges: root.showBadges
+                            isDropTarget: root.workspaceDropTargetId > 0
+                                && root.workspaceDropTargetId === Number(modelData.workspaceId)
+
+                            onWorkspaceActivated: function(group) { root.activateWorkspace(group) }
+                            onItemLaunched: function(appId) { root.requestFocusOnLaunch(appId) }
+                            onItemDragMoved: function(itemData, sourceWorkspaceId, sceneX, sceneY) {
+                                root.updateWorkspaceDropTarget(sceneX, sceneY)
                             }
+                            onItemDragDropped: function(itemData, sourceWorkspaceId, sceneX, sceneY) {
+                                root.finishWorkspaceDrag(itemData, sourceWorkspaceId, sceneX, sceneY)
+                            }
+                            onItemDragCanceled: root.workspaceDropTargetId = -1
                         }
                     }
                 }

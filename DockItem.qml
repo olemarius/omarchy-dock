@@ -26,6 +26,10 @@ Item {
     // Set false by rails whose order is derived rather than user-arranged
     // (the workspace-grouped rail), where a drag would have nothing to persist.
     property bool draggable: true
+    // Grouped rails drag a tile onto another workspace plate rather than
+    // reordering it in place. The tile only reports where the pointer went;
+    // the rail owns hit-testing and the drop.
+    property bool dragToWorkspace: false
     property int dockDragActiveIndex: -1
     readonly property bool isAnyDragging: dockDragActiveIndex >= 0 || isDragging
     property bool showBadges: true
@@ -41,6 +45,9 @@ Item {
     signal dissolveRequested(string stackId)
     signal originalAppLaunched(string appId)
     signal dragStarted(int fromIndex)
+    signal workspaceDragMoved(real sceneX, real sceneY)
+    signal workspaceDragDropped(real sceneX, real sceneY)
+    signal workspaceDragCanceled()
 
     readonly property int badgeCount: (root.itemData && typeof root.itemData.badgeCount === "number") ? root.itemData.badgeCount : 0
     property int lastBadgeCount: 0
@@ -157,8 +164,15 @@ Item {
     }
 
     // Clamped drag offset for visual rendering (strictly confined within dock surface boundaries)
-    readonly property real clampedDragOffsetX: root.isVertical ? 0 : Math.max(-root.itemIndex * root.slotSize, Math.min((root.totalCount - 1 - root.itemIndex) * root.slotSize, dragOffset.x))
-    readonly property real clampedDragOffsetY: root.isVertical ? Math.max(-root.itemIndex * root.slotSize, Math.min((root.totalCount - 1 - root.itemIndex) * root.slotSize, dragOffset.y)) : 0
+    // The rail clamp keeps a reordering drag inside the dock surface. A
+    // workspace drag has to leave its own plate to reach another one, so it
+    // travels freely in both axes instead.
+    readonly property real clampedDragOffsetX: root.dragToWorkspace
+        ? dragOffset.x
+        : (root.isVertical ? 0 : Math.max(-root.itemIndex * root.slotSize, Math.min((root.totalCount - 1 - root.itemIndex) * root.slotSize, dragOffset.x)))
+    readonly property real clampedDragOffsetY: root.dragToWorkspace
+        ? dragOffset.y
+        : (root.isVertical ? Math.max(-root.itemIndex * root.slotSize, Math.min((root.totalCount - 1 - root.itemIndex) * root.slotSize, dragOffset.y)) : 0)
 
     // Main animated icon wrapper (smooth, buttery rail motion)
     Item {
@@ -522,8 +536,8 @@ Item {
         acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
         cursorShape: (root.isDragging || mouseArea.drag.active || root.dockDragActiveIndex >= 0 || root.isAnyDragging || root.isWheelScrolling) ? Qt.BlankCursor : (root.isEditMode ? Qt.PointingHandCursor : Qt.ArrowCursor)
 
-        drag.target: root.draggable ? dragOffset : null
-        drag.axis: root.isVertical ? Drag.YAxis : Drag.XAxis
+        drag.target: (root.draggable || root.dragToWorkspace) ? dragOffset : null
+        drag.axis: root.dragToWorkspace ? Drag.XAndYAxis : (root.isVertical ? Drag.YAxis : Drag.XAxis)
         // Allow free mouse movement across the full screen while dragging along the rail
         drag.minimumX: -99999
         drag.maximumX: 99999
@@ -581,6 +595,10 @@ Item {
             }
         }
 
+        function scenePoint(mouse) {
+            return mouseArea.mapToItem(null, mouse.x, mouse.y)
+        }
+
         onPositionChanged: function(mouse) {
             if (root.isWheelScrolling) {
                 root.isWheelScrolling = false
@@ -590,6 +608,14 @@ Item {
                 if (!root.isDragging) {
                     root.isDragging = true
                     root.dragStarted(root.itemIndex)
+                }
+                if (root.dragToWorkspace) {
+                    // Mark the gesture as a drag so releasing over a plate does
+                    // not also read as a click that focuses the window.
+                    didDrag = true
+                    var movePoint = mouseArea.scenePoint(mouse)
+                    root.workspaceDragMoved(movePoint.x, movePoint.y)
+                    return
                 }
                 // Enforce strict 1D rail axis lock (zero orthogonal wobble)
                 if (root.isVertical) {
@@ -629,6 +655,14 @@ Item {
 
         onReleased: function(mouse) {
             longPressTimer.stop()
+            if (root.isDragging && root.dragToWorkspace) {
+                root.isDragging = false
+                var dropPoint = mouseArea.scenePoint(mouse)
+                dragOffset.x = 0
+                dragOffset.y = 0
+                root.workspaceDragDropped(dropPoint.x, dropPoint.y)
+                return
+            }
             if (root.isDragging) {
                 root.isDragging = false
                 var rawOffset = root.isVertical ? dragOffset.y : dragOffset.x
@@ -677,6 +711,13 @@ Item {
         onCanceled: {
             longPressTimer.stop()
             didLongPress = false
+            if (root.isDragging && root.dragToWorkspace) {
+                root.isDragging = false
+                dragOffset.x = 0
+                dragOffset.y = 0
+                root.workspaceDragCanceled()
+                return
+            }
             if (root.isDragging) {
                 root.isDragging = false
                 root.isMergeActive = false

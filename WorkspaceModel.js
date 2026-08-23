@@ -65,9 +65,18 @@ function buildWindowWorkspaceIndex(hyprToplevels) {
         var ws = safeGet(t, "workspace", null);
         index.wayland.push(wl);
         index.workspaceId.push(ws ? Number(safeGet(ws, "id", -1)) : -1);
-        index.address.push(String(safeGet(t, "address", "")));
+        index.address.push(normalizeAddress(safeGet(t, "address", "")));
     }
     return index;
+}
+
+// Hyprland reports a toplevel address without the 0x its own dispatchers and
+// `hyprctl clients` use. Normalise once here so callers can hand it straight
+// to a window selector.
+function normalizeAddress(address) {
+    var a = String(address || "");
+    if (!a) return "";
+    return a.indexOf("0x") === 0 ? a : "0x" + a;
 }
 
 function workspaceIdForWindow(index, waylandToplevel) {
@@ -98,7 +107,7 @@ function findEntryFor(entries, appId) {
 // One dock tile: every window of a single application living on a single
 // workspace. Shape matches buildDockItems() output so DockItem.qml can render
 // it unchanged.
-function buildAppItem(appId, entry, windows, activeToplevel, appLibrary, badgeCounts, urgentCounts) {
+function buildAppItem(appId, entry, windows, addresses, activeToplevel, appLibrary, badgeCounts, urgentCounts) {
     var rawIcon = (entry && entry.icon) ? entry.icon : (appId || "application-x-executable");
     var icon = appId;
     try {
@@ -147,7 +156,11 @@ function buildAppItem(appId, entry, windows, activeToplevel, appLibrary, badgeCo
         windowCount: windows.length,
         badgeCount: badge.count,
         hasUrgent: badge.hasUrgent,
-        toplevels: windows
+        toplevels: windows,
+        // Hyprland window addresses parallel to `toplevels`. The Wayland
+        // handles drive focus and close; only Hyprland can move a window to
+        // another workspace, and it needs an address to name one.
+        addresses: addresses
     };
 }
 
@@ -220,10 +233,12 @@ function buildWorkspaceGroups(hyprToplevels, workspaces, knownWindows, activeTop
     for (var w = 0; w < windows.length; w++) {
         var win = windows[w];
         if (!win) continue;
-        var wsId = workspaceIdForWindow(index, win);
+        var pos = index.wayland.indexOf(win);
+        if (pos === -1) continue;
+        var wsId = index.workspaceId[pos];
         if (!isNormalWorkspaceId(wsId)) continue;
         if (!buckets[wsId]) buckets[wsId] = [];
-        buckets[wsId].push(win);
+        buckets[wsId].push({ wayland: win, address: index.address[pos] });
     }
 
     var groups = [];
@@ -237,22 +252,23 @@ function buildWorkspaceGroups(hyprToplevels, workspaces, knownWindows, activeTop
         var order = [];
         var byKey = {};
         for (var b = 0; b < bucket.length; b++) {
-            var top = bucket[b];
+            var top = bucket[b].wayland;
             var appId = String(safeGet(top, "appId", ""));
             var entry = findEntryFor(entryList, appId);
             var key = appKeyFor(entry, appId);
             if (!byKey[key]) {
-                byKey[key] = { appId: appId, entry: entry, windows: [] };
+                byKey[key] = { appId: appId, entry: entry, windows: [], addresses: [] };
                 order.push(key);
             }
             byKey[key].windows.push(top);
+            byKey[key].addresses.push(bucket[b].address);
         }
 
         var items = [];
         for (var o = 0; o < order.length; o++) {
             if (maxItemsPerGroup && items.length >= maxItemsPerGroup) break;
             var g = byKey[order[o]];
-            items.push(buildAppItem(g.appId, g.entry, g.windows, activeToplevel,
+            items.push(buildAppItem(g.appId, g.entry, g.windows, g.addresses, activeToplevel,
                                     appLibrary, badgeCounts, urgentCounts));
         }
 
