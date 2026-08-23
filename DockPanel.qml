@@ -113,9 +113,25 @@ Item {
         function setShowBadges(val: string): string { root.showBadges = (val === "true" || val === "1"); root.saveSettings(); return "ok" }
         function setGroupByWorkspace(val: string): string { root.setGroupByWorkspace(val === "true" || val === "1"); return "ok" }
         function setShowEmptyWorkspaces(val: string): string { root.showEmptyWorkspaces = (val === "true" || val === "1"); root.saveSettings(); root.updateDockItems(); return "ok" }
+        function setMaxEmptyWorkspaces(val: string): string {
+            var maxEmpty = parseInt(val, 10)
+            if (isNaN(maxEmpty) || maxEmpty < -1 || maxEmpty > 20) return "invalid"
+            root.maxEmptyWorkspaces = maxEmpty
+            root.saveSettings()
+            root.updateDockItems()
+            return "ok"
+        }
         function setWorkspaceScope(val: string): string { root.workspaceScope = (val === "monitor") ? "monitor" : "all"; root.saveSettings(); root.updateDockItems(); return "ok" }
         // Comma-separated monitor names, or an empty string to clear.
         function setExcludeMonitors(val: string): string { root.setExcludeMonitors(String(val || "")); return "ok" }
+        function setWorkspaceStride(val: string): string {
+            var stride = parseInt(val, 10)
+            if (isNaN(stride) || stride < 0 || stride > 100) return "invalid"
+            root.workspaceStride = stride
+            root.saveSettings()
+            root.updateDockItems()
+            return "ok"
+        }
         function listMonitors(): string {
             var out = []
             var mons = (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values : []
@@ -336,6 +352,10 @@ Item {
     // each on its own clickable plate, instead of as one flat pinned rail.
     property bool groupByWorkspace: false
     property bool showEmptyWorkspaces: true
+    // Cap on empty plates. A run of untouched workspaces says nothing beyond
+    // "there is somewhere free to go", so one is shown by default and the rest
+    // are dropped. -1 shows every empty workspace.
+    property int maxEmptyWorkspaces: 1
     property int paddedWorkspaceCount: 5
     // "all" shows every workspace; "monitor" restricts the rail to workspaces
     // that currently live on the monitor the dock is displayed on.
@@ -343,6 +363,12 @@ Item {
     // Monitor names (as Hyprland reports them, e.g. "eDP-1") whose workspaces
     // are left off the rail entirely.
     property var excludeMonitors: []
+    // Spanning workspaces. Hyprland cannot put one workspace on two monitors,
+    // so multi-monitor setups pair them by offset: workspace 2 on the main
+    // screen and 12 on the second are two halves of one idea. Set this to that
+    // offset (usually 10) and each plate represents the pair; 0 keeps one
+    // plate per workspace.
+    property int workspaceStride: 0
     readonly property bool showAppMenu: root.widgetsEnabled && root.dockWidgets && (root.dockWidgets.indexOf("omarchy.apps") !== -1)
     property string appMenuPosition: "left"
     property bool widgetsEnabled: true
@@ -630,6 +656,10 @@ Item {
                 if (s.showEmptyWorkspaces !== undefined) {
                     root.showEmptyWorkspaces = (s.showEmptyWorkspaces === true)
                 }
+                if (s.maxEmptyWorkspaces !== undefined) {
+                    var maxEmpty = parseInt(s.maxEmptyWorkspaces, 10)
+                    if (!isNaN(maxEmpty) && maxEmpty >= -1 && maxEmpty <= 20) root.maxEmptyWorkspaces = maxEmpty
+                }
                 if (s.paddedWorkspaceCount !== undefined) {
                     var padCount = parseInt(s.paddedWorkspaceCount, 10)
                     if (!isNaN(padCount) && padCount >= 0 && padCount <= 20) root.paddedWorkspaceCount = padCount
@@ -639,6 +669,10 @@ Item {
                 }
                 if (s.excludeMonitors !== undefined && Array.isArray(s.excludeMonitors)) {
                     root.excludeMonitors = s.excludeMonitors
+                }
+                if (s.workspaceStride !== undefined) {
+                    var stride = parseInt(s.workspaceStride, 10)
+                    if (!isNaN(stride) && stride >= 0 && stride <= 100) root.workspaceStride = stride
                 }
                 if (s.appMenuPosition !== undefined) {
                     root.appMenuPosition = s.appMenuPosition
@@ -676,9 +710,11 @@ Item {
             showBadges: root.showBadges,
             groupByWorkspace: root.groupByWorkspace,
             showEmptyWorkspaces: root.showEmptyWorkspaces,
+            maxEmptyWorkspaces: root.maxEmptyWorkspaces,
             paddedWorkspaceCount: root.paddedWorkspaceCount,
             workspaceScope: root.workspaceScope || "all",
             excludeMonitors: root.excludeMonitors || [],
+            workspaceStride: root.workspaceStride,
             widgetsEnabled: root.widgetsEnabled,
             appMenuPosition: root.appMenuPosition || "left",
             widgetPosition: root.widgetPosition || "right",
@@ -959,9 +995,12 @@ Item {
             notifTracker.canonicalUrgent,
             {
                 showEmpty: root.showEmptyWorkspaces,
+                maxEmptyPlates: root.maxEmptyWorkspaces,
                 padTo: root.paddedWorkspaceCount,
                 monitorName: (root.workspaceScope === "monitor") ? root.dockMonitorName : "",
                 excludeMonitors: root.excludeMonitors,
+                stride: root.workspaceStride,
+                screenCount: (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values.length : 1,
                 maxItemsPerGroup: 0
             })
     }
@@ -1002,17 +1041,31 @@ Item {
     // A tile stands for "this application on this workspace", so dragging it
     // moves every window it represents. `follow = false` keeps the gesture an
     // organising one: the windows move, the user stays where they are.
+    // Real workspace a window should land on when dropped on a plate. Without
+    // spanning that is just the plate. With spanning, the window keeps the
+    // screen it is already on: its current workspace names the screen's block,
+    // and only the position within that block changes.
+    function targetWorkspaceFor(plateId, currentWorkspaceId) {
+        if (root.workspaceStride <= 0) return plateId
+        var current = Number(currentWorkspaceId)
+        if (!isFinite(current) || current < 1) return plateId
+        var block = Math.floor((current - 1) / root.workspaceStride)
+        return plateId + block * root.workspaceStride
+    }
+
     function moveItemToWorkspace(itemData, workspaceId) {
         var addresses = (itemData && itemData.addresses) ? itemData.addresses : []
+        var sourceIds = (itemData && itemData.workspaceIds) ? itemData.workspaceIds : []
         var moved = 0
         for (var i = 0; i < addresses.length; i++) {
             var address = String(addresses[i] || "")
             if (!address) continue
+            var target = root.targetWorkspaceFor(Number(workspaceId), sourceIds[i])
             if (Hyprland.usingLua === true) {
                 Hyprland.dispatch("hl.dsp.window.move({ window = \"address:" + address
-                    + "\", workspace = \"" + workspaceId + "\", follow = false })")
+                    + "\", workspace = \"" + target + "\", follow = false })")
             } else {
-                Hyprland.dispatch("movetoworkspacesilent " + workspaceId + ",address:" + address)
+                Hyprland.dispatch("movetoworkspacesilent " + target + ",address:" + address)
             }
             moved++
         }
@@ -1021,21 +1074,25 @@ Item {
         root.updateDockItems()
     }
 
-    // Switching workspace goes through the compositor object when Hyprland
-    // knows the workspace, and falls back to a dispatch for a padded workspace
-    // that has never been opened and therefore has no object yet.
-    function activateWorkspace(groupData) {
-        if (!groupData) return
-        var ws = groupData.workspace
-        if (ws && typeof ws.activate === "function") {
-            ws.activate()
-            return
-        }
-        var id = Number(groupData.workspaceId)
+    // Activate one real workspace, preferring the live compositor object and
+    // falling back to a dispatch for a workspace that does not exist yet.
+    function activateWorkspaceId(realId, liveWorkspaces) {
+        var id = Number(realId)
         if (!isFinite(id) || id <= 0) return
-        // Hyprland configured in Lua (Omarchy's default) no longer parses the
-        // legacy `workspace N` dispatcher, so the form has to match the config
-        // language the compositor reports.
+        var list = liveWorkspaces || []
+        for (var i = 0; i < list.length; i++) {
+            if (list[i] && Number(list[i].id) === id && typeof list[i].activate === "function") {
+                list[i].activate()
+                return
+            }
+        }
+        root.dispatchWorkspace(id)
+    }
+
+    // Hyprland configured in Lua (Omarchy's default) no longer parses the
+    // legacy `workspace N` dispatcher, so the form has to match the config
+    // language the compositor reports.
+    function dispatchWorkspace(id) {
         try {
             if (Hyprland.usingLua === true) {
                 Hyprland.dispatch("hl.dsp.focus({ workspace = \"" + id + "\" })")
@@ -1046,6 +1103,38 @@ Item {
             Util.execDetached("hyprctl dispatch " + Util.shellQuote("hl.dsp.focus({ workspace = \"" + id + "\" })")
                 + " || hyprctl dispatch workspace " + id)
         }
+    }
+
+    // Switching workspace goes through the compositor object when Hyprland
+    // knows the workspace, and falls back to a dispatch for a padded workspace
+    // that has never been opened and therefore has no object yet.
+    function activateWorkspace(groupData) {
+        if (!groupData) return
+
+        // A spanning plate holds one workspace per screen. Walk them from the
+        // highest id down so focus lands on the lowest - the main screen's
+        // half - rather than on whichever screen happened to sort last.
+        //
+        // The walk uses the plate's expected ids, not only the ones Hyprland
+        // has already created: an untouched plate's far half does not exist
+        // yet, and skipping it would move just one screen.
+        var expected = groupData.expectedRealIds
+        if (expected && expected.length > 1) {
+            var ordered = []
+            for (var i = 0; i < expected.length; i++) ordered.push(Number(expected[i]))
+            ordered.sort(function(a, b) { return b - a })
+            for (var j = 0; j < ordered.length; j++) {
+                root.activateWorkspaceId(ordered[j], groupData.workspaces)
+            }
+            return
+        }
+
+        var ws = groupData.workspace
+        if (ws && typeof ws.activate === "function") {
+            ws.activate()
+            return
+        }
+        root.dispatchWorkspace(Number(groupData.workspaceId))
     }
 
     onGroupByWorkspaceChanged: {
@@ -1069,6 +1158,8 @@ Item {
     onShowEmptyWorkspacesChanged: root.updateDockItems()
     onWorkspaceScopeChanged: root.updateDockItems()
     onExcludeMonitorsChanged: root.updateDockItems()
+    onWorkspaceStrideChanged: root.updateDockItems()
+    onMaxEmptyWorkspacesChanged: root.updateDockItems()
 
     function setExcludeMonitors(raw) {
         var parts = String(raw || "").split(",")

@@ -76,7 +76,9 @@ You can customize options directly via the `···` status bar widget or in `~/.
   "showEmptyWorkspaces": true,
   "paddedWorkspaceCount": 5,
   "workspaceScope": "all",
-  "excludeMonitors": []
+  "excludeMonitors": [],
+  "maxEmptyWorkspaces": 1,
+  "workspaceStride": 0
 }
 ```
 
@@ -85,9 +87,11 @@ You can customize options directly via the `···` status bar widget or in `~/.
 | Key | Default | Meaning |
 | :--- | :--- | :--- |
 | `groupByWorkspace` | `false` | Group running windows onto one clickable plate per workspace instead of the flat pinned rail. |
-| `showEmptyWorkspaces` | `true` | Keep plates for workspaces with no windows, so the rail does not reflow as workspaces empty out. |
+| `showEmptyWorkspaces` | `true` | Keep plates for workspaces with no windows, so the rail does not reflow as workspaces empty out. Set `false` for a rail of only what is running. |
+| `maxEmptyWorkspaces` | `1` | How many empty plates to keep. A trailing run of untouched workspaces says nothing beyond "there is somewhere free to go", so one is shown and the rest dropped; `-1` shows them all. The workspace you are currently viewing always keeps its plate, however empty. |
 | `paddedWorkspaceCount` | `5` | How many numbered workspaces are always shown when `showEmptyWorkspaces` is on. |
 | `workspaceScope` | `"all"` | `"all"` shows every workspace; `"monitor"` restricts the rail to workspaces on the dock's own monitor. |
+| `workspaceStride` | `0` | Spanning workspaces. Hyprland cannot put one workspace on two monitors, so multi-monitor setups often pair them by offset — workspace 2 on the main screen and 12 on the second being two halves of one idea. Set this to that offset (usually `10`) and each plate represents the pair: it shows the windows of both halves, clicking it switches every screen at once, and dragging a tile onto it keeps each window on the screen it is already on. `0` gives one plate per workspace. |
 | `excludeMonitors` | `[]` | Monitor names whose workspaces are left off the rail entirely, e.g. `["eDP-1"]` to ignore the laptop screen while docked. Excluded workspaces are not padded back as empty plates. Workspaces the compositor has never opened have no monitor yet, so they still appear — set `showEmptyWorkspaces` to `false` for a rail of only what exists. |
 
 Pinning, folders, reordering and edit mode apply to the flat rail. The grouped rail is a live view of what the compositor reports, so its tiles are not reorderable: left click focuses, the mouse wheel cycles that application's windows on that workspace, middle click spawns another instance, and dragging moves windows between workspaces rather than rearranging the rail.
@@ -100,6 +104,8 @@ omarchy-shell rosakodu.dock setShowEmptyWorkspaces false
 omarchy-shell rosakodu.dock setWorkspaceScope monitor
 omarchy-shell rosakodu.dock listMonitors                  # names to exclude
 omarchy-shell rosakodu.dock setExcludeMonitors eDP-1      # comma-separated; "" clears
+omarchy-shell rosakodu.dock setMaxEmptyWorkspaces 0      # -1 for all
+omarchy-shell rosakodu.dock setWorkspaceStride 10        # 0 disables spanning
 ```
 
 Pinned items and folder layouts are automatically saved to `~/.config/omarchy/dock-pinned.json`.
