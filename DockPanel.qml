@@ -1667,16 +1667,41 @@ Item {
         // monitor rather than from the workspace list: the monitor's
         // activeWorkspace tracks the compositor exactly, while a workspace's
         // own monitor goes stale after a switch.
-        readonly property int currentWorkspaceId: {
+        //
+        // Sampled on the compositor's events rather than bound: a binding over
+        // Hyprland.monitors is evaluated once and never re-runs when the
+        // monitor's active workspace changes underneath it, which left the
+        // highlight stuck on whichever workspace happened to be up at startup.
+        property int currentWorkspaceId: -1
+
+        function refreshCurrentWorkspace() {
             var name = view.dockScreen ? String(view.dockScreen.name || "") : ""
-            if (!name) return -1
+            if (!name) { view.currentWorkspaceId = -1; return }
+
+            // Ask Hyprland rather than read what is cached. A monitor's active
+            // workspace only updates for workspaces the compositor has already
+            // tracked, so switching to one that has never been used left the
+            // cached value pointing at the workspace before it - and the
+            // highlight stayed behind, on a workspace no longer on screen.
+            try { Hyprland.refreshMonitors() } catch (e) {}
+
             var monitors = (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values : []
             for (var i = 0; i < monitors.length; i++) {
                 if (String(monitors[i].name || "") !== name) continue
                 var active = monitors[i].activeWorkspace
-                return active ? Number(active.id) : -1
+                view.currentWorkspaceId = active ? Number(active.id) : -1
+                return
             }
-            return -1
+            view.currentWorkspaceId = -1
+        }
+
+        // Focus changes are worth an immediate look. Everything else arrives
+        // through the debounced rebuild, which refreshes this too - a query per
+        // raw compositor event would be a round-trip per keystroke.
+        Connections {
+            target: (typeof Hyprland !== "undefined") ? Hyprland : null
+            function onFocusedWorkspaceChanged() { view.refreshCurrentWorkspace() }
+            function onFocusedMonitorChanged() { view.refreshCurrentWorkspace() }
         }
 
         // Which plate that workspace belongs to. Bound rather than baked into
@@ -1781,6 +1806,7 @@ Item {
         }
 
         function rebuildWorkspaceGroups() {
+            view.refreshCurrentWorkspace()
             if (!root.groupByWorkspace) {
                 if (view.workspaceGroups.length > 0) view.workspaceGroups = []
                 return
@@ -1883,7 +1909,10 @@ Item {
             onTriggered: view.rebuildWorkspaceGroups()
         }
 
-        Component.onCompleted: root.registerView(view)
+        Component.onCompleted: {
+            view.refreshCurrentWorkspace()
+            root.registerView(view)
+        }
         Component.onDestruction: root.unregisterView(view)
 
         property int dockDragActiveIndex: -1
