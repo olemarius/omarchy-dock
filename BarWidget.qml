@@ -17,8 +17,33 @@ BarWidget {
   property bool showFolderTitles: true
   property bool showBadges: true
   property bool groupByWorkspace: false
+  // 0 = one plate per workspace, >0 = plates span paired workspaces across
+  // monitors (the offset between a screen's workspaces, conventionally 10).
+  property int workspaceStride: 0
+  readonly property int spanningStride: 10
   property bool widgetsEnabled: true
   property bool settingsOpen: false
+
+  // The window this widget is drawn in, and therefore the monitor its popup
+  // belongs on. Without this the popup is placed on whichever screen
+  // Quickshell picks by default, which on a multi-head setup is regularly not
+  // the one holding the button. Same resolution the shell's own PopupCard uses.
+  readonly property var anchorWindow: root.QsWindow ? root.QsWindow.window : null
+
+  // Centre of this button in its bar window, sampled rather than bound:
+  // mapToItem() is not reactive, and neighbours in the same bar section change
+  // width as they update (the clock relaying out every minute is enough to
+  // shift this button), which would leave a bound value stale. Sampling when
+  // the popup opens is what the alignment actually depends on.
+  property real anchorCenterX: 0
+  property real anchorCenterY: 0
+
+  function refreshAnchorCenter() {
+    var point = root.mapToItem(null, root.width / 2, root.height / 2)
+    if (!point) return
+    root.anchorCenterX = point.x
+    root.anchorCenterY = point.y
+  }
 
   FileView {
     id: settingsFile
@@ -55,6 +80,10 @@ BarWidget {
         if (s && s.groupByWorkspace !== undefined) {
           root.groupByWorkspace = (s.groupByWorkspace === true)
         }
+        if (s && s.workspaceStride !== undefined) {
+          var stride = parseInt(s.workspaceStride, 10)
+          if (!isNaN(stride) && stride >= 0) root.workspaceStride = stride
+        }
         if (s && s.widgetsEnabled !== undefined) {
           root.widgetsEnabled = (s.widgetsEnabled === true)
         }
@@ -88,6 +117,7 @@ BarWidget {
     s.showFolderTitles = root.showFolderTitles
     s.showBadges = root.showBadges
     s.groupByWorkspace = root.groupByWorkspace
+    s.workspaceStride = root.workspaceStride
     s.widgetsEnabled = root.widgetsEnabled
     s.appMenuPosition = root.appMenuPosition || s.appMenuPosition || "left"
     s.widgetPosition = root.widgetPosition || s.widgetPosition || "right"
@@ -127,6 +157,15 @@ BarWidget {
     root.groupByWorkspace = val
     if (root.bar && typeof root.bar.run === "function") {
       root.bar.run("omarchy-shell rosakodu.dock setGroupByWorkspace " + (val ? "true" : "false"))
+    } else {
+      saveSettings()
+    }
+  }
+
+  function setWorkspaceStride(val) {
+    root.workspaceStride = val
+    if (root.bar && typeof root.bar.run === "function") {
+      root.bar.run("omarchy-shell rosakodu.dock setWorkspaceStride " + val)
     } else {
       saveSettings()
     }
@@ -177,6 +216,7 @@ BarWidget {
 
   onSettingsOpenChanged: {
     if (settingsOpen) {
+      root.refreshAnchorCenter()
       settingsCard.forceActiveFocus()
     }
   }
@@ -191,7 +231,9 @@ BarWidget {
     }
   }
 
-  // Settings Popup Overlay Window (Strictly centered horizontally on screen, matching Weather panel)
+  // Settings Popup Overlay Window, aligned under the widget rather than
+  // centred on the screen: the button can sit in any bar section, and a card
+  // that ignores it reads as belonging to something else.
   PanelWindow {
     id: settingsWindow
     visible: root.settingsOpen
@@ -200,16 +242,33 @@ BarWidget {
     WlrLayershell.layer: WlrLayer.Overlay
     exclusionMode: ExclusionMode.Ignore
     color: "transparent"
+    screen: root.anchorWindow ? root.anchorWindow.screen : null
 
     readonly property bool isBarBottom: root.bar && root.bar.position === "bottom"
     readonly property bool isBarLeft: root.bar && root.bar.position === "left"
     readonly property bool isBarRight: root.bar && root.bar.position === "right"
 
-    readonly property real screenWidth: root.bar && root.bar.screen ? root.bar.screen.width : (Screen.width || 1920)
-    readonly property real screenHeight: root.bar && root.bar.screen ? root.bar.screen.height : (Screen.height || 1080)
-    // Strictly centered horizontally on screen for top/bottom bar, vertically for left/right bar
-    readonly property real calculatedLeft: Math.round((screenWidth - 280) / 2)
-    readonly property real calculatedTop: Math.round((screenHeight - (settingsCard.height || 120)) / 2)
+    // Measure against the widget's own screen. Reading a width off the bar
+    // handed back the other monitor on a multi-head setup, which centred the
+    // card using the wrong width and pushed it off the narrow screen.
+    readonly property var popupScreen: root.anchorWindow ? root.anchorWindow.screen : null
+    readonly property real screenWidth: popupScreen ? popupScreen.width : (Screen.width || 1920)
+    readonly property real screenHeight: popupScreen ? popupScreen.height : (Screen.height || 1080)
+
+    readonly property real cardWidth: 280
+    readonly property real edgeGap: (Style.gapsOut || 5) + 4
+
+    // The bar spans the monitor, so the button's position in its bar window
+    // doubles as its position on screen.
+    readonly property real widgetCenterX: root.anchorCenterX > 0 ? root.anchorCenterX : screenWidth / 2
+    readonly property real widgetCenterY: root.anchorCenterY > 0 ? root.anchorCenterY : screenHeight / 2
+
+    // Centred under the button, then clamped so a button near either end
+    // still gets a fully visible card.
+    readonly property real calculatedLeft: Math.round(Math.max(edgeGap,
+      Math.min(screenWidth - cardWidth - edgeGap, widgetCenterX - cardWidth / 2)))
+    readonly property real calculatedTop: Math.round(Math.max(edgeGap,
+      Math.min(screenHeight - (settingsCard.height || 120) - edgeGap, widgetCenterY - (settingsCard.height || 120) / 2)))
 
     anchors {
       top: (isBarRight || isBarLeft) ? true : !isBarBottom
@@ -313,6 +372,8 @@ BarWidget {
                 font.pixelSize: 12
                 font.bold: true
                 color: Color.popups.text
+                Layout.fillWidth: true
+                elide: Text.ElideRight
               }
 
               Text {
@@ -320,6 +381,8 @@ BarWidget {
                 font.family: Style.font.family
                 font.pixelSize: 10
                 color: Color.muted
+                Layout.fillWidth: true
+                elide: Text.ElideRight
               }
             }
 
@@ -388,6 +451,8 @@ BarWidget {
                 font.pixelSize: 12
                 font.bold: true
                 color: Color.popups.text
+                Layout.fillWidth: true
+                elide: Text.ElideRight
               }
 
               Text {
@@ -395,6 +460,8 @@ BarWidget {
                 font.family: Style.font.family
                 font.pixelSize: 10
                 color: Color.muted
+                Layout.fillWidth: true
+                elide: Text.ElideRight
               }
             }
 
@@ -463,13 +530,17 @@ BarWidget {
                 font.pixelSize: 12
                 font.bold: true
                 color: Color.popups.text
+                Layout.fillWidth: true
+                elide: Text.ElideRight
               }
 
               Text {
-                text: "Running windows per workspace, click a plate to switch"
+                text: "One plate per workspace"
                 font.family: Style.font.family
                 font.pixelSize: 10
                 color: Color.muted
+                Layout.fillWidth: true
+                elide: Text.ElideRight
               }
             }
 
@@ -508,6 +579,98 @@ BarWidget {
           }
         }
 
+        // Workspace Mode Row. Only meaningful while grouping is on, so it
+        // dims with the rest of the disabled controls rather than vanishing
+        // and making the card jump height as the toggle flips.
+        Rectangle {
+          id: workspaceModeRow
+          Layout.fillWidth: true
+          height: 74
+          radius: 8
+          opacity: (root.dockEnabled && root.groupByWorkspace) ? 1.0 : 0.4
+          enabled: root.dockEnabled && root.groupByWorkspace
+          color: "transparent"
+          Behavior on opacity { NumberAnimation { duration: 150 } }
+
+          ColumnLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 10
+            anchors.rightMargin: 10
+            anchors.topMargin: 6
+            anchors.bottomMargin: 6
+            spacing: 6
+
+            ColumnLayout {
+              Layout.fillWidth: true
+              spacing: 2
+
+              Text {
+                text: "Mode"
+                font.family: Style.font.family
+                font.pixelSize: 12
+                font.bold: true
+                color: Color.popups.text
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+              }
+
+              Text {
+                text: "Which screens one plate covers"
+                font.family: Style.font.family
+                font.pixelSize: 10
+                color: Color.muted
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+              }
+            }
+
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: 6
+
+              Repeater {
+                model: [
+                  { label: "Single monitor", stride: 0 },
+                  { label: "All monitors", stride: root.spanningStride }
+                ]
+
+                Rectangle {
+                  required property var modelData
+
+                  readonly property bool selected: root.workspaceStride === modelData.stride
+
+                  Layout.fillWidth: true
+                  Layout.preferredHeight: 26
+                  radius: 6
+                  color: selected
+                    ? Color.accent
+                    : (modeMouse.containsMouse
+                        ? Qt.rgba(Color.popups.text.r, Color.popups.text.g, Color.popups.text.b, 0.14)
+                        : Qt.rgba(Color.popups.text.r, Color.popups.text.g, Color.popups.text.b, 0.07))
+                  Behavior on color { ColorAnimation { duration: 140 } }
+
+                  Text {
+                    anchors.centerIn: parent
+                    text: modelData.label
+                    font.family: Style.font.family
+                    font.pixelSize: 10
+                    font.bold: parent.selected
+                    color: parent.selected ? Color.background : Color.popups.text
+                  }
+
+                  MouseArea {
+                    id: modeMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.setWorkspaceStride(modelData.stride)
+                  }
+                }
+              }
+            }
+          }
+        }
+
         // Toggle Folder Names Row
         Rectangle {
           id: folderTitlesRow
@@ -537,6 +700,8 @@ BarWidget {
                 font.pixelSize: 12
                 font.bold: true
                 color: Color.popups.text
+                Layout.fillWidth: true
+                elide: Text.ElideRight
               }
 
               Text {
@@ -544,6 +709,8 @@ BarWidget {
                 font.family: Style.font.family
                 font.pixelSize: 10
                 color: Color.muted
+                Layout.fillWidth: true
+                elide: Text.ElideRight
               }
             }
 
@@ -612,6 +779,8 @@ BarWidget {
                 font.pixelSize: 12
                 font.bold: true
                 color: Color.popups.text
+                Layout.fillWidth: true
+                elide: Text.ElideRight
               }
 
               Text {
@@ -619,6 +788,8 @@ BarWidget {
                 font.family: Style.font.family
                 font.pixelSize: 10
                 color: Color.muted
+                Layout.fillWidth: true
+                elide: Text.ElideRight
               }
             }
 
@@ -687,6 +858,8 @@ BarWidget {
                 font.pixelSize: 12
                 font.bold: true
                 color: Color.popups.text
+                Layout.fillWidth: true
+                elide: Text.ElideRight
               }
 
               Text {
@@ -694,6 +867,8 @@ BarWidget {
                 font.family: Style.font.family
                 font.pixelSize: 10
                 color: Color.muted
+                Layout.fillWidth: true
+                elide: Text.ElideRight
               }
             }
 
