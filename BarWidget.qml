@@ -16,6 +16,7 @@ BarWidget {
   property bool autohide: false
   property bool showFolderTitles: true
   property bool showBadges: true
+  property bool groupByWorkspace: false
   property bool widgetsEnabled: true
   property bool settingsOpen: false
 
@@ -51,6 +52,9 @@ BarWidget {
         if (s && s.showBadges !== undefined) {
           root.showBadges = (s.showBadges === true)
         }
+        if (s && s.groupByWorkspace !== undefined) {
+          root.groupByWorkspace = (s.groupByWorkspace === true)
+        }
         if (s && s.widgetsEnabled !== undefined) {
           root.widgetsEnabled = (s.widgetsEnabled === true)
         }
@@ -83,6 +87,7 @@ BarWidget {
     s.autohide = root.autohide
     s.showFolderTitles = root.showFolderTitles
     s.showBadges = root.showBadges
+    s.groupByWorkspace = root.groupByWorkspace
     s.widgetsEnabled = root.widgetsEnabled
     s.appMenuPosition = root.appMenuPosition || s.appMenuPosition || "left"
     s.widgetPosition = root.widgetPosition || s.widgetPosition || "right"
@@ -113,6 +118,15 @@ BarWidget {
     root.autohide = val
     if (root.bar && typeof root.bar.run === "function") {
       root.bar.run("omarchy-shell rosakodu.dock setAutohide " + (val ? "true" : "false"))
+    } else {
+      saveSettings()
+    }
+  }
+
+  function setGroupByWorkspace(val) {
+    root.groupByWorkspace = val
+    if (root.bar && typeof root.bar.run === "function") {
+      root.bar.run("omarchy-shell rosakodu.dock setGroupByWorkspace " + (val ? "true" : "false"))
     } else {
       saveSettings()
     }
@@ -416,6 +430,80 @@ BarWidget {
             cursorShape: Qt.PointingHandCursor
             onClicked: {
               root.setAutohide(!root.autohide)
+            }
+          }
+        }
+
+        // Toggle Workspace Grouping Row
+        Rectangle {
+          id: groupByWorkspaceRow
+          Layout.fillWidth: true
+          height: 48
+          radius: 8
+          opacity: root.dockEnabled ? 1.0 : 0.4
+          enabled: root.dockEnabled
+          color: groupMouse.containsMouse ? Style.hoverFillFor(Color.popups.text, Color.accent) : "transparent"
+          Behavior on color { ColorAnimation { duration: 120 } }
+          Behavior on opacity { NumberAnimation { duration: 150 } }
+
+          RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 10
+            anchors.rightMargin: 10
+            spacing: 8
+
+            ColumnLayout {
+              Layout.fillWidth: true
+              Layout.alignment: Qt.AlignVCenter
+              spacing: 2
+
+              Text {
+                text: "Group by workspace"
+                font.family: Style.font.family
+                font.pixelSize: 12
+                font.bold: true
+                color: Color.popups.text
+              }
+
+              Text {
+                text: "Running windows per workspace, click a plate to switch"
+                font.family: Style.font.family
+                font.pixelSize: 10
+                color: Color.muted
+              }
+            }
+
+            Rectangle {
+              id: switchGroupTrack
+              Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
+              Layout.preferredWidth: 36
+              Layout.preferredHeight: 20
+              width: 36
+              height: 20
+              radius: 10
+              color: root.groupByWorkspace ? Color.accent : Qt.rgba(Color.popups.text.r, Color.popups.text.g, Color.popups.text.b, 0.25)
+              Behavior on color { ColorAnimation { duration: 180 } }
+
+              Rectangle {
+                id: switchGroupThumb
+                width: 14
+                height: 14
+                radius: 7
+                anchors.verticalCenter: parent.verticalCenter
+                x: root.groupByWorkspace ? (switchGroupTrack.width - width - 3) : 3
+                color: root.groupByWorkspace ? Color.background : Color.popups.text
+                Behavior on x { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+              }
+            }
+          }
+
+          MouseArea {
+            id: groupMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              root.setGroupByWorkspace(!root.groupByWorkspace)
             }
           }
         }

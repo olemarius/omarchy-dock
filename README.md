@@ -8,6 +8,7 @@ A modern, highly polished, and fully native application dock plugin for **Omarch
 
 ## ✨ Features
 
+- 🗂️ **Workspace Grouping** *(opt-in)* — Lay the dock out per Hyprland workspace instead of as one flat rail. Each workspace gets its own plate holding the windows running on it, with multiple windows of the same application collapsed into a single icon and window-count capsule (two browser windows on workspace 1 = one browser icon). **Clicking a plate's background switches to that workspace**; clicking an icon focuses that specific window. The focused workspace takes the accent border, active workspaces on other monitors stay highlighted, and empty workspaces remain clickable so the rail keeps a stable width. Toggle it from the `···` bar widget or with `"groupByWorkspace": true`.
 - 🧩 **Integrated Dock Widgets** — Move native system widgets (Weather, Volume & Audio, Bluetooth, Network, Power/Battery, Display, Clock/Calendar, Tailscale VPN) directly into the dock. Choose widget placement (Left or Right) via the dedicated widget configuration popup. When clicked, all widget panels appear centered on screen with clean system spacing.
 - 📁 **App Stacks (Folders)** — Organize apps into folders with multi-column grids. Create folders by simply dragging one icon onto another. Customize folder icons with built-in Nerd Font glyphs, edit titles inline, and enjoy marquee text scrolling for long names. Folders seamlessly remain open when launching or switching applications.
 - ✨ **iOS-Style Edit Mode (Wiggle)** — Long-press (450ms) any icon to enter edit mode with smooth physical wobbling ($\pm 3.8^\circ$, 105ms). Quickly toggle favorite pins (`•`), dissolve folders (`-`), remove dock widgets (`-`), or reorder apps.
@@ -34,6 +35,7 @@ A modern, highly polished, and fully native application dock plugin for **Omarch
 | **Launch Duplicate** | `Middle-Click` / `Tab` | Instantly spawns a new duplicate instance of the application with immediate focus. |
 | **Cycle Duplicates** | `Mouse Wheel` / `←` `→` Arrow Keys | Cycles through duplicate windows via 3-slot sliding viewport (original dash `━` and duplicate dots `•`). |
 | **Open Widget Panel** | `Left-Click` *(on Widget)* | Opens the hosted system widget panel (Audio, Wi-Fi, BT, Power, Monitor, etc.) centered on screen. |
+| **Switch Workspace** | `Left-Click` *(on plate background)* | In workspace grouping mode, clicking a workspace plate anywhere outside an icon switches to that workspace. |
 | **Enter Edit Mode** | `Long-Press` *(450ms)* | Activates iOS-style physical wobble mode to reorder apps, toggle pins, remove widgets, or dissolve folders. |
 | **Reorder & Folders** | `Drag & Drop` | Drag along the rail to reorder. Drag one icon onto another to create a folder (App Stack). |
 | **Folder Icon Picker** | `Right-Click` *(on Folder)* | Opens the Nerd Font glyph picker to customize the folder's icon. |
@@ -68,8 +70,31 @@ You can customize options directly via the `···` status bar widget or in `~/.
   "widgetPosition": "left",
   "dockWidgets": [
     "omarchy.apps"
-  ]
+  ],
+  "groupByWorkspace": false,
+  "showEmptyWorkspaces": true,
+  "paddedWorkspaceCount": 5,
+  "workspaceScope": "all"
 }
+```
+
+### Workspace grouping
+
+| Key | Default | Meaning |
+| :--- | :--- | :--- |
+| `groupByWorkspace` | `false` | Group running windows onto one clickable plate per workspace instead of the flat pinned rail. |
+| `showEmptyWorkspaces` | `true` | Keep plates for workspaces with no windows, so the rail does not reflow as workspaces empty out. |
+| `paddedWorkspaceCount` | `5` | How many numbered workspaces are always shown when `showEmptyWorkspaces` is on. |
+| `workspaceScope` | `"all"` | `"all"` shows every workspace; `"monitor"` restricts the rail to workspaces on the dock's own monitor. |
+
+Pinning, folders, drag-and-drop reordering and edit mode apply to the flat rail. The grouped rail is a live view of what the compositor reports, so its tiles are not reorderable — left click focuses, the mouse wheel cycles that application's windows on that workspace, and middle click spawns another instance.
+
+The same options are reachable over IPC:
+
+```bash
+omarchy-shell rosakodu.dock setGroupByWorkspace true
+omarchy-shell rosakodu.dock setShowEmptyWorkspaces false
+omarchy-shell rosakodu.dock setWorkspaceScope monitor
 ```
 
 Pinned items and folder layouts are automatically saved to `~/.config/omarchy/dock-pinned.json`.

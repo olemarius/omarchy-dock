@@ -23,6 +23,9 @@ Item {
     property bool isSelected: false
     property bool isMergeTarget: false
     property bool isEditMode: false
+    // Set false by rails whose order is derived rather than user-arranged
+    // (the workspace-grouped rail), where a drag would have nothing to persist.
+    property bool draggable: true
     property int dockDragActiveIndex: -1
     readonly property bool isAnyDragging: dockDragActiveIndex >= 0 || isDragging
     property bool showBadges: true
@@ -519,7 +522,7 @@ Item {
         acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
         cursorShape: (root.isDragging || mouseArea.drag.active || root.dockDragActiveIndex >= 0 || root.isAnyDragging || root.isWheelScrolling) ? Qt.BlankCursor : (root.isEditMode ? Qt.PointingHandCursor : Qt.ArrowCursor)
 
-        drag.target: dragOffset
+        drag.target: root.draggable ? dragOffset : null
         drag.axis: root.isVertical ? Drag.YAxis : Drag.XAxis
         // Allow free mouse movement across the full screen while dragging along the rail
         drag.minimumX: -99999
@@ -574,7 +577,7 @@ Item {
             if (mouse.button === Qt.LeftButton) {
                 didDrag = false
                 didLongPress = false
-                longPressTimer.restart()
+                if (root.draggable) longPressTimer.restart()
             }
         }
 

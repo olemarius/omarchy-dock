@@ -7,6 +7,7 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 import "DockModel.js" as DockModel
+import "WorkspaceModel.js" as WorkspaceModel
 import "components"
 
 Item {
@@ -110,6 +111,9 @@ Item {
         function setAutohideEdgeDepth(val: string): string { var n = parseInt(val, 10); if (!isNaN(n) && n >= 1 && n <= 64) { root.autohideEdgeDepth = n; root.saveSettings(); } return "ok" }
         function setShowFolderTitles(val: string): string { root.showFolderTitles = (val === "true" || val === "1"); root.saveSettings(); return "ok" }
         function setShowBadges(val: string): string { root.showBadges = (val === "true" || val === "1"); root.saveSettings(); return "ok" }
+        function setGroupByWorkspace(val: string): string { root.setGroupByWorkspace(val === "true" || val === "1"); return "ok" }
+        function setShowEmptyWorkspaces(val: string): string { root.showEmptyWorkspaces = (val === "true" || val === "1"); root.saveSettings(); root.updateDockItems(); return "ok" }
+        function setWorkspaceScope(val: string): string { root.workspaceScope = (val === "monitor") ? "monitor" : "all"; root.saveSettings(); root.updateDockItems(); return "ok" }
         function ping(): string { return "ok" }
     }
 
@@ -320,6 +324,14 @@ Item {
     property int autohideEdgeDepth: 1  // pixels from screen edge that trigger dock reveal
     property bool showFolderTitles: true
     property bool showBadges: true
+    // Workspace grouping: running windows are laid out per Hyprland workspace,
+    // each on its own clickable plate, instead of as one flat pinned rail.
+    property bool groupByWorkspace: false
+    property bool showEmptyWorkspaces: true
+    property int paddedWorkspaceCount: 5
+    // "all" shows every workspace; "monitor" restricts the rail to workspaces
+    // that currently live on the monitor the dock is displayed on.
+    property string workspaceScope: "all"
     readonly property bool showAppMenu: root.widgetsEnabled && root.dockWidgets && (root.dockWidgets.indexOf("omarchy.apps") !== -1)
     property string appMenuPosition: "left"
     property bool widgetsEnabled: true
@@ -387,8 +399,17 @@ Item {
 
     Connections {
         target: Hyprland
-        function onFocusedWorkspaceChanged() { root.refreshActiveWorkspaceWindowCount() }
-        function onRawEvent(event) { root.refreshActiveWorkspaceWindowCount() }
+        function onFocusedWorkspaceChanged() {
+            root.refreshActiveWorkspaceWindowCount()
+            if (root.groupByWorkspace) root.updateDockItems()
+        }
+        // Workspace switches and window moves change the grouped rail without
+        // changing the toplevel list, so the grouped model refreshes on the
+        // compositor event stream too (debounced by updateDockItems()).
+        function onRawEvent(event) {
+            root.refreshActiveWorkspaceWindowCount()
+            if (root.groupByWorkspace) root.updateDockItems()
+        }
     }
 
     Connections {
@@ -507,7 +528,10 @@ Item {
 
     readonly property real leftSeparatorSize: hasLeftWidgets ? 8 : 0
     readonly property real rightSeparatorSize: hasRightWidgets ? 8 : 0
-    readonly property real itemsWidth: (root.dockItems.length * root.slotSize)
+    readonly property real groupedRailExtent: root.isVertical ? workspaceRail.implicitHeight : workspaceRail.implicitWidth
+    readonly property real itemsWidth: root.groupByWorkspace
+        ? root.groupedRailExtent
+        : (root.dockItems.length * root.slotSize)
 
     // Dynamic max items limit for dock bar based on logical screen dimensions & scale (15 items on 1080p @ 1.6x, scales dynamically for Ultrawide 21:9 / 32:9)
     readonly property var activeScreen: (dockWindow && dockWindow.screen) ? dockWindow.screen : (Quickshell.screens.length > 0 ? Quickshell.screens[0] : null)
@@ -589,6 +613,19 @@ Item {
                 if (s.showBadges !== undefined) {
                     root.showBadges = (s.showBadges === true)
                 }
+                if (s.groupByWorkspace !== undefined) {
+                    root.groupByWorkspace = (s.groupByWorkspace === true)
+                }
+                if (s.showEmptyWorkspaces !== undefined) {
+                    root.showEmptyWorkspaces = (s.showEmptyWorkspaces === true)
+                }
+                if (s.paddedWorkspaceCount !== undefined) {
+                    var padCount = parseInt(s.paddedWorkspaceCount, 10)
+                    if (!isNaN(padCount) && padCount >= 0 && padCount <= 20) root.paddedWorkspaceCount = padCount
+                }
+                if (s.workspaceScope !== undefined) {
+                    root.workspaceScope = (s.workspaceScope === "monitor") ? "monitor" : "all"
+                }
                 if (s.appMenuPosition !== undefined) {
                     root.appMenuPosition = s.appMenuPosition
                 }
@@ -623,6 +660,10 @@ Item {
             autohideEdgeDepth: root.autohideEdgeDepth,
             showFolderTitles: root.showFolderTitles,
             showBadges: root.showBadges,
+            groupByWorkspace: root.groupByWorkspace,
+            showEmptyWorkspaces: root.showEmptyWorkspaces,
+            paddedWorkspaceCount: root.paddedWorkspaceCount,
+            workspaceScope: root.workspaceScope || "all",
             widgetsEnabled: root.widgetsEnabled,
             appMenuPosition: root.appMenuPosition || "left",
             widgetPosition: root.widgetPosition || "right",
@@ -864,6 +905,87 @@ Item {
     property int iconRevision: 0
     property var pinnedIds: []
     property var dockItems: []
+
+    // Workspace-grouped model. Built from the same window registry as
+    // dockItems, so both rails agree on what is running; only the layout and
+    // grouping differ.
+    property var workspaceGroups: []
+
+    readonly property string dockMonitorName: {
+        try {
+            if (dockWindow && dockWindow.screen && dockWindow.screen.name) return String(dockWindow.screen.name)
+        } catch (e) {}
+        return ""
+    }
+
+    // Gap between two workspace plates on the grouped rail.
+    readonly property real workspaceGroupGap: 6
+
+    function rebuildWorkspaceGroups() {
+        if (!root.groupByWorkspace) {
+            if (root.workspaceGroups.length > 0) root.workspaceGroups = []
+            return
+        }
+        var lib = root.shell ? root.shell.appLibrary : null
+        var allEntries = (typeof DesktopEntries !== "undefined" && DesktopEntries.applications && DesktopEntries.applications.values && DesktopEntries.applications.values.length > 0)
+            ? DesktopEntries.applications.values
+            : (lib && typeof lib.sortedEntries === "function" ? lib.sortedEntries("") : root.appRows)
+        var hyprTops = (Hyprland.toplevels && Hyprland.toplevels.values) ? Hyprland.toplevels.values : []
+        var wsList = (Hyprland.workspaces && Hyprland.workspaces.values) ? Hyprland.workspaces.values : []
+
+        root.workspaceGroups = WorkspaceModel.buildWorkspaceGroups(
+            hyprTops,
+            wsList,
+            root.knownWindows,
+            ToplevelManager.activeToplevel,
+            allEntries,
+            lib,
+            notifTracker.canonicalCounts,
+            notifTracker.canonicalUrgent,
+            {
+                showEmpty: root.showEmptyWorkspaces,
+                padTo: root.paddedWorkspaceCount,
+                monitorName: (root.workspaceScope === "monitor") ? root.dockMonitorName : "",
+                maxItemsPerGroup: 0
+            })
+    }
+
+    // Switching workspace goes through the compositor object when Hyprland
+    // knows the workspace, and falls back to a dispatch for a padded workspace
+    // that has never been opened and therefore has no object yet.
+    function activateWorkspace(groupData) {
+        if (!groupData) return
+        var ws = groupData.workspace
+        if (ws && typeof ws.activate === "function") {
+            ws.activate()
+            return
+        }
+        var id = Number(groupData.workspaceId)
+        if (!isFinite(id) || id <= 0) return
+        try {
+            Hyprland.dispatch("workspace " + id)
+        } catch (e) {
+            Util.execDetached("hyprctl dispatch workspace " + id)
+        }
+    }
+
+    onGroupByWorkspaceChanged: {
+        root.activeStackItem = null
+        root.activeMenuItem = null
+        root.isEditMode = false
+        root.dockDragActiveIndex = -1
+        root.dockDragTargetIndex = -1
+        root.currentMergeTargetIndex = -1
+        root.updateDockItems()
+    }
+
+    onShowEmptyWorkspacesChanged: root.updateDockItems()
+    onWorkspaceScopeChanged: root.updateDockItems()
+
+    function setGroupByWorkspace(val) {
+        root.groupByWorkspace = (val === true)
+        root.saveSettings()
+    }
     property var appRows: (shell && shell.appLibrary) ? shell.appLibrary.sortedEntries("") : []
 
     // Curated available symbols for folder icon personalization (Clean monochrome vector glyphs)
@@ -1044,6 +1166,7 @@ Item {
             ? DesktopEntries.applications.values
             : (lib && typeof lib.sortedEntries === "function" ? lib.sortedEntries("") : root.appRows)
         root.dockItems = DockModel.buildDockItems(root.pinnedIds, toplevels, active, allEntries, lib, notifTracker.canonicalCounts, notifTracker.canonicalUrgent, root.maxDockItems)
+        root.rebuildWorkspaceGroups()
 
         // Refresh active stack item contents if open
         if (root.activeStackItem) {
@@ -1739,7 +1862,7 @@ Item {
 
                 // 3. Applications & Folders
                 Repeater {
-                    model: root.dockItems
+                    model: root.groupByWorkspace ? [] : root.dockItems
 
                     DockItem {
                         itemData: modelData
@@ -1836,6 +1959,74 @@ Item {
                             root.dockDragTargetIndex = -1
                             root.currentMergeTargetIndex = -1
                             root.setPinned(DockModel.mergeIntoStack(root.pinnedIds, root.dockItems, fromIdx, targetIdx))
+                        }
+                    }
+                }
+
+                // 3b. Workspace-grouped rail. A positioner rather than the
+                // absolute slot maths of the flat rail: plate width varies with
+                // how many applications a workspace holds, and itemsWidth reads
+                // the measured extent back so separators and the right-hand
+                // widgets keep lining up.
+                Loader {
+                    id: workspaceRail
+                    active: root.groupByWorkspace
+                    visible: root.groupByWorkspace
+                    readonly property real railBaseOffset: (root.hasLeftWidgets ? (root.leftWidgetsWidth + root.leftSeparatorSize) : 0)
+                    x: root.isVertical ? 0 : railBaseOffset
+                    y: root.isVertical ? railBaseOffset : 0
+                    z: 1
+                    sourceComponent: root.isVertical ? verticalRailComponent : horizontalRailComponent
+                    implicitWidth: item ? item.implicitWidth : 0
+                    implicitHeight: item ? item.implicitHeight : 0
+                }
+
+                Component {
+                    id: horizontalRailComponent
+                    Row {
+                        spacing: root.workspaceGroupGap
+                        Repeater {
+                            model: root.workspaceGroups
+                            WorkspaceGroup {
+                                required property var modelData
+                                groupData: modelData
+                                barPosition: root.barPosition
+                                shell: root.shell
+                                slotSize: root.slotSize
+                                iconBaseSize: root.iconBaseSize
+                                iconRevision: root.iconRevision
+                                iconsReady: root.iconsReady
+                                systemBorderSize: root.systemBorderSize
+                                systemRounding: root.systemRounding
+                                showBadges: root.showBadges
+                                onWorkspaceActivated: function(group) { root.activateWorkspace(group) }
+                                onItemLaunched: function(appId) { root.requestFocusOnLaunch(appId) }
+                            }
+                        }
+                    }
+                }
+
+                Component {
+                    id: verticalRailComponent
+                    Column {
+                        spacing: root.workspaceGroupGap
+                        Repeater {
+                            model: root.workspaceGroups
+                            WorkspaceGroup {
+                                required property var modelData
+                                groupData: modelData
+                                barPosition: root.barPosition
+                                shell: root.shell
+                                slotSize: root.slotSize
+                                iconBaseSize: root.iconBaseSize
+                                iconRevision: root.iconRevision
+                                iconsReady: root.iconsReady
+                                systemBorderSize: root.systemBorderSize
+                                systemRounding: root.systemRounding
+                                showBadges: root.showBadges
+                                onWorkspaceActivated: function(group) { root.activateWorkspace(group) }
+                                onItemLaunched: function(appId) { root.requestFocusOnLaunch(appId) }
+                            }
                         }
                     }
                 }
