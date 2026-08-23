@@ -19,6 +19,7 @@ A modern, highly polished, and fully native application dock plugin for **Omarch
 - 👁️ **Smart Cursor Hiding** — The mouse cursor is automatically hidden (`Qt.BlankCursor`) during mouse wheel scrolling and folder title hover to ensure an unobstructed view of the status capsule and animations.
 - 🌐 **Full Web Apps (PWA) Support** — Automatic domain matching for Chrome/Chromium web apps (Google Maps, Google Contacts, WhatsApp, YouTube, Discord, etc.) with native GTK theme icons.
 - ⚡ **Zero-Flicker Boot & Tile Lift** — Two-phase initialization instantly reserves Hyprland exclusive space to lift tiled windows smoothly, followed by a monolithic fade-in once all vector theme icons are loaded.
+- 🖥️ **One Dock Per Monitor** — Every connected screen gets its own dock surface, bound to that output rather than to whichever monitor Quickshell happened to pick. Each dock keeps its own hover, drag, edit mode and open folder, so using one never disturbs the other. Switch the dock off for a screen from the `···` widget's per-monitor row, or with `"disabledMonitors": ["eDP-1"]`; new monitors get a dock by default.
 - 🧭 **Dynamic Auto-Positioning** — Automatically adapts its position opposite to the Omarchy status bar (top $\leftrightarrow$ bottom, left $\leftrightarrow$ right).
 - ⏱️ **Smart Auto-Hide** — Optional auto-hide with a 1.5-second dismissal delay and instant hover reveal.
 - 🎛️ **Status Bar Settings Widget (`BarWidget`)** — Native top bar menu with smooth toggle switches for Dock Enable, Auto-hide, Folder Titles, and Dock Widgets configuration.
@@ -72,6 +73,7 @@ You can customize options directly via the `···` status bar widget or in `~/.
   "dockWidgets": [
     "omarchy.apps"
   ],
+  "disabledMonitors": [],
   "groupByWorkspace": false,
   "showEmptyWorkspaces": true,
   "paddedWorkspaceCount": 5,
@@ -80,6 +82,13 @@ You can customize options directly via the `···` status bar widget or in `~/.
   "maxEmptyWorkspaces": 1,
   "workspaceStride": 0
 }
+```
+
+`disabledMonitors` lists monitors — by the names Hyprland reports, e.g. `eDP-1` — that should not show a dock. `dockEnabled` remains the master switch across every screen; this subtracts individual ones from it. Unknown names are inert, so unplugging a display never leaves a dock switched off with no way to reach the setting.
+
+```bash
+omarchy-shell rosakodu.dock setMonitorEnabled eDP-1:false   # off for one screen
+omarchy-shell rosakodu.dock toggleMonitor                   # flip the focused screen
 ```
 
 ### Workspace grouping

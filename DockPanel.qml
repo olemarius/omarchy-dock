@@ -19,6 +19,56 @@ Item {
     property var manifest: null
     property var pluginRegistry: null
 
+    // Live dock surfaces, one per screen, in creation order. The controller owns
+    // the model and the settings; anything that has to happen "on every dock" or
+    // "on the dock you are looking at" goes through this registry.
+    property var dockViews: []
+
+    function registerView(instance) {
+        if (!instance) return
+        var next = root.dockViews.slice()
+        if (next.indexOf(instance) === -1) next.push(instance)
+        root.dockViews = next
+    }
+
+    function unregisterView(instance) {
+        var next = []
+        for (var i = 0; i < root.dockViews.length; i++) {
+            if (root.dockViews[i] !== instance) next.push(root.dockViews[i])
+        }
+        root.dockViews = next
+    }
+
+    function forEachView(fn) {
+        var views = root.dockViews
+        for (var i = 0; i < views.length; i++) {
+            if (views[i]) fn(views[i])
+        }
+    }
+
+    // The output Hyprland has focused, which is the dock a keyboard shortcut or
+    // a bar-widget toggle means. Empty until Hyprland reports one, which leaves
+    // callers on their fallback instead of guessing at an output.
+    function focusedScreenName() {
+        var monitor = (typeof Hyprland !== "undefined") ? Hyprland.focusedMonitor : null
+        return monitor ? String(monitor.name || "") : ""
+    }
+
+    // The surface a per-dock action applies to: the focused screen's, falling
+    // back to the only dock when there is one, and to the first otherwise.
+    function focusedView() {
+        var views = root.dockViews
+        if (views.length === 0) return null
+        var focused = root.focusedScreenName()
+        if (focused) {
+            for (var i = 0; i < views.length; i++) {
+                var candidate = views[i]
+                if (candidate && candidate.dockScreen && String(candidate.dockScreen.name || "") === focused) return candidate
+            }
+        }
+        return views[0]
+    }
+
     // Dock state & Multi-source Live Bar Position Tracking
     property bool opened: true
     property bool pluginEnabled: true
@@ -55,10 +105,6 @@ Item {
     readonly property real iconBaseSize: 24
 
     // Live 1D Rail Displacement for Main Dock Bar
-    property int dockDragActiveIndex: -1
-    property int dockDragTargetIndex: -1
-    property int currentMergeTargetIndex: -1
-
     function getDockVisualSlot(itemIdx, dragIdx, targetIdx) {
         if (dragIdx < 0 || targetIdx < 0 || dragIdx === targetIdx) return itemIdx;
         if (itemIdx === dragIdx) return dragIdx;
@@ -71,9 +117,6 @@ Item {
     }
 
     // Live 2D Rail Displacement inside Folder Grid
-    property int folderDragActiveIndex: -1
-    property int folderDragTargetIndex: -1
-
     function getFolderVisualSlot(itemIdx, dragIdx, targetIdx) {
         if (dragIdx < 0 || targetIdx < 0 || dragIdx === targetIdx) return itemIdx;
         if (itemIdx === dragIdx) return dragIdx;
@@ -94,9 +137,8 @@ Item {
         function refresh(): string { return root.refresh() }
         function openWidgetPicker(): string {
             root.opened = true
-            if (widgetPicker) {
-                widgetPicker.opened = true
-            }
+            var picker = root.focusedView()
+            if (picker) picker.widgetPicker.opened = true
             return "ok"
         }
         function addWidget(widgetId: string): string { root.addDockWidget(widgetId); return "ok" }
@@ -105,7 +147,11 @@ Item {
         function setAppMenuPosition(pos: string): string { root.setAppMenuPosition(pos); return "ok" }
         function setWidgetsEnabled(val: string): string { root.setWidgetsEnabled(val === "true" || val === "1"); return "ok" }
         function setWidgetPosition(pos: string): string { root.setWidgetPosition(pos); return "ok" }
-        function setEditMode(val: string): string { root.isEditMode = (val === "true" || val === "1"); return "ok" }
+        function setEditMode(val: string): string {
+            var target = root.focusedView()
+            if (target) target.isEditMode = (val === "true" || val === "1")
+            return target ? "ok" : "no-dock"
+        }
         function setDockEnabled(val: string): string { root.dockEnabled = (val === "true" || val === "1"); root.saveSettings(); return "ok" }
         function setAutohide(val: string): string { root.autohide = (val === "true" || val === "1"); root.saveSettings(); return "ok" }
         function setAutohideEdgeDepth(val: string): string { var n = parseInt(val, 10); if (!isNaN(n) && n >= 1 && n <= 64) { root.autohideEdgeDepth = n; root.saveSettings(); } return "ok" }
@@ -132,6 +178,13 @@ Item {
             root.updateDockItems()
             return "ok"
         }
+        function setMonitorEnabled(val: string): string {
+            var parts = String(val || "").split(":")
+            if (parts.length < 2) return "usage: <monitor>:<true|false>"
+            root.setMonitorEnabled(parts[0], parts[1] === "true" || parts[1] === "1")
+            return "ok"
+        }
+        function toggleMonitor(): string { root.toggleFocusedMonitor(); return "ok" }
         function listMonitors(): string {
             var out = []
             var mons = (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values : []
@@ -143,9 +196,8 @@ Item {
 
     function openWidgetPicker() {
         root.opened = true
-        if (widgetPicker) {
-            widgetPicker.opened = true
-        }
+        var picker = root.focusedView()
+        if (picker) picker.widgetPicker.opened = true
     }
 
     // Methods called by shell.summon / shell.hide / shell.toggle
@@ -155,9 +207,11 @@ Item {
             try {
                 var p = (typeof payloadJson === "string") ? JSON.parse(payloadJson) : payloadJson
                 if (p && p.action === "openWidgetPicker") {
-                    if (widgetPicker) widgetPicker.opened = true
+                    var openPicker = root.focusedView()
+                    if (openPicker) openPicker.widgetPicker.opened = true
                 } else if (p && p.action === "closeWidgetPicker") {
-                    if (widgetPicker) widgetPicker.opened = false
+                    var closePicker = root.focusedView()
+                    if (closePicker) closePicker.widgetPicker.opened = false
                 }
             } catch(e) {}
         }
@@ -165,41 +219,12 @@ Item {
 
     function close() {
         root.opened = false
-        root.activeMenuItem = null
-        root.activeStackItem = null
-        root.dockDragActiveIndex = -1
-        root.dockDragTargetIndex = -1
-        root.currentMergeTargetIndex = -1
-        root.folderDragActiveIndex = -1
-        root.folderDragTargetIndex = -1
+        root.forEachView(function(instance) { instance.resetInteraction() })
     }
 
     function toggle() {
         root.opened = !root.opened
-        root.activeMenuItem = null
-        root.activeStackItem = null
-        root.dockDragActiveIndex = -1
-        root.dockDragTargetIndex = -1
-        root.currentMergeTargetIndex = -1
-        root.folderDragActiveIndex = -1
-        root.folderDragTargetIndex = -1
-    }
-
-    function toggleStack(item, index) {
-        root.activeMenuItem = null
-        if (!item) {
-            root.activeStackItem = null
-            return
-        }
-        var itemId = item.id || item.appId || ""
-        if (root.activeStackItem && (root.activeStackItem.id === itemId || root.activeStackItem.appId === itemId || root.activeStackItemIndex === index)) {
-            root.activeStackItem = null
-        } else {
-            root.activeStackItemIndex = index
-            if (item.isStack) {
-                root.activeStackItem = item
-            }
-        }
+        root.forEachView(function(instance) { instance.resetInteraction() })
     }
 
     // Persistent stable chronological window registry (never reordered on focus or workspace switch)
@@ -254,22 +279,6 @@ Item {
     }
 
     // Deterministic Right-Click Menu Toggle (Only for Folders / Stacks icon selection)
-    function toggleMenu(item, index, fromFolder) {
-        if (!item || !item.isStack) {
-            root.activeMenuItem = null
-            return
-        }
-        var appId = item.appId || item.id || ""
-        if (root.activeMenuItem && root.activeMenuItem.appId === appId) {
-            root.activeMenuItem = null
-        } else {
-            root.activeStackItem = null
-            root.isMenuFromFolder = false
-            root.activeMenuItemIndex = index
-            root.activeMenuItem = item
-        }
-    }
-
     // Standalone plugin lifecycle: enabled by default, disabled ONLY if in disabledPlugins
     function updatePluginEnabled() {
         var reg = root.pluginRegistry || (shell ? shell.pluginRegistry : null)
@@ -363,6 +372,10 @@ Item {
     // Monitor names (as Hyprland reports them, e.g. "eDP-1") whose workspaces
     // are left off the rail entirely.
     property var excludeMonitors: []
+    // Monitors the user has switched the dock off on. Opt-out rather than
+    // opt-in, so a newly connected screen gets a dock without being configured
+    // first, and an unknown name here is simply inert.
+    property var disabledMonitors: []
     // Spanning workspaces. Hyprland cannot put one workspace on two monitors,
     // so multi-monitor setups pair them by offset: workspace 2 on the main
     // screen and 12 on the second are two halves of one idea. Set this to that
@@ -375,37 +388,6 @@ Item {
     property string widgetPosition: "right"
     property var dockWidgets: []
     property var widgetSavedPositions: ({})
-    property bool isDockHovered: false
-    property bool isStackHovered: false
-    property bool isMenuHovered: false
-    property bool isWidgetPanelHovered: false
-
-    property var loadedWidgetItems: []
-
-    function checkWidgetPanelsOpen() {
-        for (var i = 0; i < root.loadedWidgetItems.length; i++) {
-            var w = root.loadedWidgetItems[i]
-            if (w) {
-                if (w.opened === true) return true
-                if (w.panelLoader && w.panelLoader.item && w.panelLoader.item.opened === true) return true
-                if (w.panel && w.panel.open === true) return true
-            }
-        }
-        return false
-    }
-
-    function evaluateHoverState() {
-        var anyOpenWidget = checkWidgetPanelsOpen()
-        var isDockWinHovered = (!root.autohide || !root.shouldSlideOut) && dockHoverHandler && dockHoverHandler.hovered
-        var anyHover = isDockWinHovered || root.isStackHovered || root.isMenuHovered || root.isWidgetPanelHovered || anyOpenWidget
-        if (anyHover) {
-            autohideLeaveTimer.stop()
-            root.isDockHovered = true
-        } else {
-            autohideLeaveTimer.restart()
-        }
-    }
-
     function getActiveWorkspaceWindowCount() {
         var activeId = -1
         if (Hyprland.focusedWorkspace && Hyprland.focusedWorkspace.id !== undefined) {
@@ -468,36 +450,6 @@ Item {
     }
 
     readonly property bool isWorkspaceEmpty: root.activeWorkspaceWindowCount === 0
-    readonly property bool isDockActive: root.isDockHovered || root.isStackHovered || root.isMenuHovered || root.isWidgetPanelHovered || root.checkWidgetPanelsOpen() || (root.dockDragActiveIndex >= 0)
-    readonly property bool shouldSlideOut: root.autohide && !root.isDockActive && !root.isWorkspaceEmpty
-
-    function closeAllWidgetPanels() {
-        for (var i = 0; i < root.loadedWidgetItems.length; i++) {
-            var w = root.loadedWidgetItems[i]
-            if (w) {
-                if (typeof w.close === "function") {
-                    w.close()
-                }
-                if (w.panelLoader && w.panelLoader.item && typeof w.panelLoader.item.close === "function") {
-                    w.panelLoader.item.close()
-                }
-                if (w.panel && typeof w.panel.close === "function") {
-                    w.panel.close()
-                }
-            }
-        }
-    }
-
-    onShouldSlideOutChanged: {
-        if (shouldSlideOut) {
-            root.activeStackItem = null
-            root.activeMenuItem = null
-            root.isEditingFolderTitle = false
-            root.isEditMode = false
-            root.closeAllWidgetPanels()
-        }
-    }
-
     readonly property var widgetLayout: DockModel.getDockWidgetLayout(root.showAppMenu, root.appMenuPosition, root.widgetsEnabled, root.dockWidgets, root.widgetPosition)
     readonly property var leftWidgetsList: widgetLayout.leftWidgets || []
     readonly property var rightWidgetsList: widgetLayout.rightWidgets || []
@@ -565,42 +517,30 @@ Item {
 
     readonly property real leftSeparatorSize: hasLeftWidgets ? 8 : 0
     readonly property real rightSeparatorSize: hasRightWidgets ? 8 : 0
-    readonly property real groupedRailExtent: root.isVertical ? workspaceRail.implicitHeight : workspaceRail.implicitWidth
-    readonly property real itemsWidth: root.groupByWorkspace
-        ? root.groupedRailExtent
-        : (root.dockItems.length * root.slotSize)
-
     // Dynamic max items limit for dock bar based on logical screen dimensions & scale (15 items on 1080p @ 1.6x, scales dynamically for Ultrawide 21:9 / 32:9)
-    readonly property var activeScreen: (dockWindow && dockWindow.screen) ? dockWindow.screen : (Quickshell.screens.length > 0 ? Quickshell.screens[0] : null)
-    readonly property real logicalScreenWidth: (activeScreen && activeScreen.width > 0) ? activeScreen.width : 1200
-    readonly property real logicalScreenHeight: (activeScreen && activeScreen.height > 0) ? activeScreen.height : 675
-    readonly property int maxDockItems: {
-        if (root.isVertical) {
-            // Vertical: limit by screen height minus widget slots
-            var usedV = (hasLeftWidgets ? (leftWidgetsWidth + leftSeparatorSize) : 0)
-                      + (hasRightWidgets ? (rightSeparatorSize + rightWidgetsWidth) : 0)
-            var availableH = Math.max(0, logicalScreenHeight - usedV)
-            return Math.max(3, Math.floor(availableH / root.slotSize))
-        } else {
-            // Horizontal: limit by screen width minus widget slots
-            var usedH = (hasLeftWidgets ? (leftWidgetsWidth + leftSeparatorSize) : 0)
-                      + (hasRightWidgets ? (rightSeparatorSize + rightWidgetsWidth) : 0)
-            var availableW = Math.max(0, logicalScreenWidth - usedH)
-            return Math.max(3, Math.floor(availableW / root.slotSize))
-        }
+    // How many items a dock of this size can hold, once the hosted widgets have
+    // taken their slots. Each surface asks for its own screen; the shared model
+    // is built to the largest answer so no screen is starved, and a narrower
+    // dock renders the prefix that fits it.
+    function itemCapacityFor(screenWidth, screenHeight) {
+        var used = (hasLeftWidgets ? (leftWidgetsWidth + leftSeparatorSize) : 0)
+                 + (hasRightWidgets ? (rightSeparatorSize + rightWidgetsWidth) : 0)
+        var available = Math.max(0, (root.isVertical ? screenHeight : screenWidth) - used)
+        return Math.max(3, Math.floor(available / root.slotSize))
     }
 
-    readonly property real totalDockDimension: Math.max(root.slotSize,
-        (hasLeftWidgets ? (leftWidgetsWidth + leftSeparatorSize) : 0) +
-        itemsWidth +
-        (hasRightWidgets ? (rightSeparatorSize + rightWidgetsWidth) : 0))
+    readonly property int maxDockItems: {
+        var screens = Quickshell.screens
+        var best = 3
+        for (var i = 0; i < screens.length; i++) {
+            var candidate = root.itemCapacityFor(screens[i].width, screens[i].height)
+            if (candidate > best) best = candidate
+        }
+        return best
+    }
 
     onDockEnabledChanged: {
-        if (!dockEnabled) {
-            root.activeStackItem = null
-            root.activeMenuItem = null
-            root.isEditMode = false
-        }
+        if (!dockEnabled) root.forEachView(function(instance) { instance.resetInteraction() })
     }
 
     property bool isSavingSettings: false
@@ -670,6 +610,9 @@ Item {
                 if (s.excludeMonitors !== undefined && Array.isArray(s.excludeMonitors)) {
                     root.excludeMonitors = s.excludeMonitors
                 }
+                if (s.disabledMonitors !== undefined && Array.isArray(s.disabledMonitors)) {
+                    root.disabledMonitors = s.disabledMonitors
+                }
                 if (s.workspaceStride !== undefined) {
                     var stride = parseInt(s.workspaceStride, 10)
                     if (!isNaN(stride) && stride >= 0 && stride <= 100) root.workspaceStride = stride
@@ -714,6 +657,7 @@ Item {
             paddedWorkspaceCount: root.paddedWorkspaceCount,
             workspaceScope: root.workspaceScope || "all",
             excludeMonitors: root.excludeMonitors || [],
+            disabledMonitors: root.disabledMonitors || [],
             workspaceStride: root.workspaceStride,
             widgetsEnabled: root.widgetsEnabled,
             appMenuPosition: root.appMenuPosition || "left",
@@ -911,8 +855,6 @@ Item {
     property int systemRounding: Style.cornerRadius >= 0 ? Style.cornerRadius : 12
 
     // Unified Edit Mode State (Jiggle Mode across dock and open folders)
-    property bool isEditMode: false
-
     function closeAppWindows(appIdOrItem) {
         if (!appIdOrItem) return
         var toplevels = []
@@ -932,24 +874,6 @@ Item {
     }
 
     // Right-Click Menu State
-    property var activeMenuItem: null
-    property int activeMenuItemIndex: 0
-    property bool isMenuFromFolder: false
-    property int activeMenuItemFolderIndex: 0
-    readonly property bool isMenuOpen: activeMenuItem !== null
-
-    property var activeStackItem: null
-    property int activeStackItemIndex: 0
-    property bool isEditingFolderTitle: false
-    readonly property bool isStackOpen: activeStackItem !== null
-
-    onActiveStackItemChanged: {
-        if (activeStackItem) {
-            if (stackWindow && stackWindow.stackCard) stackWindow.stackCard.forceActiveFocus()
-        } else {
-            root.isEditingFolderTitle = false
-        }
-    }
 
     // Pinned apps persistence
     property string userPinnedPath: Quickshell.env("HOME") + "/.config/omarchy/dock-pinned.json"
@@ -960,84 +884,16 @@ Item {
     // Workspace-grouped model. Built from the same window registry as
     // dockItems, so both rails agree on what is running; only the layout and
     // grouping differ.
-    property var workspaceGroups: []
-
-    readonly property string dockMonitorName: {
-        try {
-            if (dockWindow && dockWindow.screen && dockWindow.screen.name) return String(dockWindow.screen.name)
-        } catch (e) {}
-        return ""
-    }
 
     // Gap between two workspace plates on the grouped rail.
     readonly property real workspaceGroupGap: 6
 
-    function rebuildWorkspaceGroups() {
-        if (!root.groupByWorkspace) {
-            if (root.workspaceGroups.length > 0) root.workspaceGroups = []
-            return
-        }
-        var lib = root.shell ? root.shell.appLibrary : null
-        var allEntries = (typeof DesktopEntries !== "undefined" && DesktopEntries.applications && DesktopEntries.applications.values && DesktopEntries.applications.values.length > 0)
-            ? DesktopEntries.applications.values
-            : (lib && typeof lib.sortedEntries === "function" ? lib.sortedEntries("") : root.appRows)
-        var hyprTops = (Hyprland.toplevels && Hyprland.toplevels.values) ? Hyprland.toplevels.values : []
-        var wsList = (Hyprland.workspaces && Hyprland.workspaces.values) ? Hyprland.workspaces.values : []
-
-        root.workspaceGroups = WorkspaceModel.buildWorkspaceGroups(
-            hyprTops,
-            wsList,
-            root.knownWindows,
-            ToplevelManager.activeToplevel,
-            allEntries,
-            lib,
-            notifTracker.canonicalCounts,
-            notifTracker.canonicalUrgent,
-            {
-                showEmpty: root.showEmptyWorkspaces,
-                maxEmptyPlates: root.maxEmptyWorkspaces,
-                padTo: root.paddedWorkspaceCount,
-                monitorName: (root.workspaceScope === "monitor") ? root.dockMonitorName : "",
-                excludeMonitors: root.excludeMonitors,
-                stride: root.workspaceStride,
-                screenCount: (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values.length : 1,
-                maxItemsPerGroup: 0
-            })
-    }
 
     // Workspace id currently under a dragged tile, or -1. Drives the plate
     // highlight and is the drop target when the pointer is released.
-    property int workspaceDropTargetId: -1
-
     // Which plate sits under a point in window coordinates. The rail's plates
     // are the only children carrying groupData, so the Repeater itself and any
     // future siblings are skipped rather than mis-hit.
-    function workspaceGroupAt(sceneX, sceneY) {
-        var kids = workspaceRail.children
-        for (var i = 0; i < kids.length; i++) {
-            var candidate = kids[i]
-            if (!candidate || candidate.groupData === undefined || candidate.groupData === null) continue
-            var local = candidate.mapFromItem(null, sceneX, sceneY)
-            if (local.x >= 0 && local.y >= 0 && local.x < candidate.width && local.y < candidate.height)
-                return candidate
-        }
-        return null
-    }
-
-    function updateWorkspaceDropTarget(sceneX, sceneY) {
-        var group = root.workspaceGroupAt(sceneX, sceneY)
-        var id = (group && group.groupData) ? Number(group.groupData.workspaceId) : -1
-        root.workspaceDropTargetId = isFinite(id) ? id : -1
-    }
-
-    function finishWorkspaceDrag(itemData, sourceWorkspaceId, sceneX, sceneY) {
-        var target = root.workspaceDropTargetId
-        root.workspaceDropTargetId = -1
-        if (!itemData || target <= 0) return
-        if (target === Number(sourceWorkspaceId)) return
-        root.moveItemToWorkspace(itemData, target)
-    }
-
     // A tile stands for "this application on this workspace", so dragging it
     // moves every window it represents. `follow = false` keeps the gesture an
     // organising one: the windows move, the user stays where they are.
@@ -1146,12 +1002,7 @@ Item {
                 Hyprland.refreshWorkspaces()
             } catch (e) {}
         }
-        root.activeStackItem = null
-        root.activeMenuItem = null
-        root.isEditMode = false
-        root.dockDragActiveIndex = -1
-        root.dockDragTargetIndex = -1
-        root.currentMergeTargetIndex = -1
+        root.forEachView(function(instance) { instance.resetInteraction() })
         root.updateDockItems()
     }
 
@@ -1160,6 +1011,33 @@ Item {
     onExcludeMonitorsChanged: root.updateDockItems()
     onWorkspaceStrideChanged: root.updateDockItems()
     onMaxEmptyWorkspacesChanged: root.updateDockItems()
+
+    // Turn the dock on or off for one screen. Named rather than indexed so the
+    // setting survives monitors being unplugged and reconnected in another order.
+    function setMonitorEnabled(monitorName, enabled) {
+        var name = String(monitorName || "")
+        if (!name) return
+        var next = []
+        for (var i = 0; i < root.disabledMonitors.length; i++) {
+            if (String(root.disabledMonitors[i]) !== name) next.push(root.disabledMonitors[i])
+        }
+        if (!enabled) next.push(name)
+        root.disabledMonitors = next
+        root.saveSettings()
+    }
+
+    function isMonitorEnabled(monitorName) {
+        var name = String(monitorName || "")
+        if (!name) return true
+        return root.disabledMonitors.indexOf(name) === -1
+    }
+
+    // What the bar widget's per-monitor row acts on.
+    function toggleFocusedMonitor() {
+        var name = root.focusedScreenName()
+        if (!name) return
+        root.setMonitorEnabled(name, !root.isMonitorEnabled(name))
+    }
 
     function setExcludeMonitors(raw) {
         var parts = String(raw || "").split(",")
@@ -1217,38 +1095,6 @@ Item {
     }
 
     // Exact Geometric Horizontal Center for Stack Popup Card (100% centered over folder icon in dock)
-    readonly property real calculatedStackLeft: {
-        var screenW = (dockWindow && dockWindow.screen) ? dockWindow.screen.width : 1920
-        var dockW = root.isVertical ? (root.slotSize + 4) : (root.totalDockDimension + 8)
-        var dockLeft = (screenW - dockW) / 2
-        var appBaseOffset = (root.widgetPosition === "left" && root.hasWidgets) ? (root.widgetsWidth + root.separatorSize) : 0
-        var iconCenterX = dockLeft + 4 + appBaseOffset + root.activeStackItemIndex * root.slotSize + (root.slotSize / 2)
-        var cardW = (stackWindow && stackWindow.stackCard) ? stackWindow.stackCard.width : 180
-        return Math.round(Math.max(6, Math.min(screenW - cardW - 6, iconCenterX - cardW / 2)))
-    }
-
-    readonly property real calculatedStackTop: {
-        var screenH = (dockWindow && dockWindow.screen) ? dockWindow.screen.height : 1080
-        var dockH = root.isVertical ? (root.totalDockDimension + 8) : (root.slotSize + 4)
-        var dockTop = (screenH - dockH) / 2
-        var appBaseOffset = (root.widgetPosition === "left" && root.hasWidgets) ? (root.widgetsWidth + root.separatorSize) : 0
-        var iconCenterY = dockTop + 4 + appBaseOffset + root.activeStackItemIndex * root.slotSize + (root.slotSize / 2)
-        var cardH = (stackWindow && stackWindow.stackCard) ? stackWindow.stackCard.height : 180
-        return Math.round(Math.max(6, Math.min(screenH - cardH - 6, iconCenterY - cardH / 2)))
-    }
-
-    function closePopups() {
-        root.activeStackItem = null
-        root.activeMenuItem = null
-        root.isEditMode = false
-        root.isEditingFolderTitle = false
-        root.folderDragActiveIndex = -1
-        root.folderDragTargetIndex = -1
-        root.currentMergeTargetIndex = -1
-        if (widgetPicker) widgetPicker.opened = false
-        root.closeAllWidgetPanels()
-    }
-
     // Auto-dismiss open folders, folder icon editor, widget panels and edit mode when system notifications / OSD appear
     readonly property var notifService: (root.shell && typeof root.shell.serviceFor === "function") ? root.shell.serviceFor("omarchy.notifications") : null
     readonly property var notifPopupModel: (root.notifService && root.notifService.popupModel) ? root.notifService.popupModel : null
@@ -1256,7 +1102,7 @@ Item {
 
     onNotifPopupCountChanged: {
         if (notifPopupCount > 0) {
-            root.closePopups()
+            root.forEachView(function(instance) { instance.closePopups() })
         }
     }
 
@@ -1264,11 +1110,11 @@ Item {
         target: root.notifPopupModel ? root.notifPopupModel : null
         ignoreUnknownSignals: true
         function onRowsInserted() {
-            root.closePopups()
+            root.forEachView(function(instance) { instance.closePopups() })
         }
         function onCountChanged() {
             if (root.notifPopupCount > 0) {
-                root.closePopups()
+                root.forEachView(function(instance) { instance.closePopups() })
             }
         }
     }
@@ -1283,7 +1129,7 @@ Item {
 
     onIsOsdOpenChanged: {
         if (isOsdOpen) {
-            root.closePopups()
+            root.forEachView(function(instance) { instance.closePopups() })
         }
     }
 
@@ -1293,7 +1139,7 @@ Item {
 
     onOsdItemOpenedChanged: {
         if (osdItemOpened) {
-            root.closePopups()
+            root.forEachView(function(instance) { instance.closePopups() })
         }
     }
 
@@ -1302,7 +1148,7 @@ Item {
         function onOpenPanelIdsChanged() {
             if (root.shell && root.shell.openPanelIds) {
                 if (root.shell.openPanelIds["omarchy.osd"] || root.shell.openPanelIds["omarchy.notifications"]) {
-                    root.closePopups()
+                    root.forEachView(function(instance) { instance.closePopups() })
                 }
             }
         }
@@ -1312,7 +1158,7 @@ Item {
         target: (root.shell && root.shell.appLibrary) ? root.shell.appLibrary : null
         function onLaunchOsdOpenChanged() {
             if (root.shell && root.shell.appLibrary && root.shell.appLibrary.launchOsdOpen) {
-                root.closePopups()
+                root.forEachView(function(instance) { instance.closePopups() })
             }
         }
     }
@@ -1357,58 +1203,9 @@ Item {
             ? DesktopEntries.applications.values
             : (lib && typeof lib.sortedEntries === "function" ? lib.sortedEntries("") : root.appRows)
         root.dockItems = DockModel.buildDockItems(root.pinnedIds, toplevels, active, allEntries, lib, notifTracker.canonicalCounts, notifTracker.canonicalUrgent, root.maxDockItems)
-        root.rebuildWorkspaceGroups()
+        root.forEachView(function(instance) { instance.rebuildWorkspaceGroups() })
 
-        // Refresh active stack item contents if open
-        if (root.activeStackItem) {
-            var found = false
-            for (var i = 0; i < root.dockItems.length; i++) {
-                var it = root.dockItems[i]
-                if (it && (it.id === root.activeStackItem.id || it.appId === root.activeStackItem.appId)) {
-                    if (it.isStack && it.subApps && it.subApps.length >= 2) {
-                        root.activeStackItem = it
-                        root.activeStackItemIndex = i
-                        found = true
-                    }
-                    break
-                }
-            }
-            if (!found) {
-                root.activeStackItem = null
-                root.folderDragActiveIndex = -1
-                root.folderDragTargetIndex = -1
-            }
-        }
-
-        // Refresh active menu item (multi-window menu) if open
-        if (root.activeMenuItem && !root.activeMenuItem.isStack && root.activeMenuItem.windows) {
-            var mAppId = root.activeMenuItem.appId
-            var mWinList = []
-            for (var mw = 0; mw < toplevels.length; mw++) {
-                var mTop = toplevels[mw]
-                if (mTop && DockModel.matchToplevel(mTop, mAppId, null)) {
-                    var mActive = (active && mTop === active)
-                    mWinList.push({
-                        index: mWinList.length,
-                        title: mTop.title || root.activeMenuItem.name || "",
-                        isActive: !!mActive
-                    })
-                }
-            }
-            if (mWinList.length === 0) {
-                root.activeMenuItem = null
-            } else {
-                root.activeMenuItem = {
-                    id: root.activeMenuItem.id,
-                    appId: root.activeMenuItem.appId,
-                    name: root.activeMenuItem.name,
-                    icon: root.activeMenuItem.icon,
-                    rawIcon: root.activeMenuItem.rawIcon,
-                    isStack: false,
-                    windows: mWinList
-                }
-            }
-        }
+        root.forEachView(function(instance) { instance.refreshOpenPopups() })
     }
 
     onPinnedIdsChanged: updateDockItems()
@@ -1715,469 +1512,708 @@ Item {
 
     readonly property var activeToplevel: ToplevelManager.activeToplevel
 
-    // 1. Outside-click dismissal for Context Menu (closes ONLY the menu)
-    HyprlandFocusGrab {
-        id: menuGrab
-        active: root.isMenuOpen
-        windows: [menuWindow]
-        onCleared: {
-            root.activeMenuItem = null
-        }
-    }
+    // ---------------------------------------------------------------- per screen
+    // One dock surface, and everything that describes *this* dock rather than the
+    // plugin as a whole: what the pointer is over, what is being dragged, which
+    // folder is open, how wide this screen's rail came out.
+    //
+    // Sharing any of that across screens is what makes a second dock feel broken -
+    // hovering one would reveal the other, and a drag would displace both rails.
+    // Everything genuinely common (settings, the pinned list, the item model)
+    // stays on the controller and is read from here as root.*.
+    component DockScreenView: Item {
+        id: view
 
-    // 3. Outside-click & Escape dismissal for Edit Mode
-    HyprlandFocusGrab {
-        id: editGrab
-        active: root.isEditMode && !root.isStackOpen && !root.isMenuOpen
-        windows: [dockWindow]
-        onCleared: {
-            root.isEditMode = false
-        }
-    }
+        // The screen this surface belongs to. Both windows bind to it, so a dock
+        // lands on a known output instead of wherever Quickshell defaults to.
+        property var dockScreen: null
 
-    onIsEditModeChanged: {
-        if (isEditMode) {
-            dockSurface.forceActiveFocus()
+        readonly property bool monitorEnabled: {
+            var name = view.dockScreen ? String(view.dockScreen.name || "") : ""
+            if (!name) return true
+            return root.disabledMonitors.indexOf(name) === -1
         }
-    }
 
-    onIsStackOpenChanged: {
-        if (isStackOpen) {
-            if (stackWindow && stackWindow.stackCard) stackWindow.stackCard.forceActiveFocus()
+        // This screen's own item cap. The shared model is built to the widest
+        // screen's capacity, so a narrower dock takes the prefix that fits it.
+        readonly property int maxDockItems: root.itemCapacityFor(view.logicalScreenWidth, view.logicalScreenHeight)
+        readonly property var visibleDockItems: root.dockItems.slice(0, view.maxDockItems)
+
+        // Drop every transient interaction. Used when the dock is hidden or
+        // disabled, so a surface never comes back mid-drag or mid-edit.
+        function resetInteraction() {
+            view.activeStackItem = null
+            view.activeMenuItem = null
+            view.isEditMode = false
+            view.isEditingFolderTitle = false
+            view.dockDragActiveIndex = -1
+            view.dockDragTargetIndex = -1
+            view.currentMergeTargetIndex = -1
+            view.folderDragActiveIndex = -1
+            view.folderDragTargetIndex = -1
+            view.workspaceDropTargetId = -1
         }
-    }
 
-    onIsMenuOpenChanged: {
-        if (isMenuOpen) {
-            if (menuWindow && menuWindow.menuCard) {
-                menuWindow.menuCard.forceActiveFocus()
-                if (root.activeMenuItem && root.activeMenuItem.isStack) {
-                    var curIcon = root.activeMenuItem.icon || "grid"
-                    var foundIdx = root.availableFolderIcons.indexOf(curIcon)
-                    menuWindow.menuCard.selectedIndex = (foundIdx >= 0) ? foundIdx : 0
+        // Keep an open folder or window menu pointed at live model data, or
+        // close it when the thing it was showing is gone. Per surface: each
+        // dock has its own open popup.
+        function refreshOpenPopups() {
+            var toplevels = root.knownWindows
+            var active = ToplevelManager.activeToplevel
+            // Refresh active stack item contents if open
+            if (view.activeStackItem) {
+                var found = false
+                for (var i = 0; i < root.dockItems.length; i++) {
+                    var it = root.dockItems[i]
+                    if (it && (it.id === view.activeStackItem.id || it.appId === view.activeStackItem.appId)) {
+                        if (it.isStack && it.subApps && it.subApps.length >= 2) {
+                            view.activeStackItem = it
+                            view.activeStackItemIndex = i
+                            found = true
+                        }
+                        break
+                    }
+                }
+                if (!found) {
+                    view.activeStackItem = null
+                    view.folderDragActiveIndex = -1
+                    view.folderDragTargetIndex = -1
+                }
+            }
+
+            // Refresh active menu item (multi-window menu) if open
+            if (view.activeMenuItem && !view.activeMenuItem.isStack && view.activeMenuItem.windows) {
+                var mAppId = view.activeMenuItem.appId
+                var mWinList = []
+                for (var mw = 0; mw < toplevels.length; mw++) {
+                    var mTop = toplevels[mw]
+                    if (mTop && DockModel.matchToplevel(mTop, mAppId, null)) {
+                        var mActive = (active && mTop === active)
+                        mWinList.push({
+                            index: mWinList.length,
+                            title: mTop.title || view.activeMenuItem.name || "",
+                            isActive: !!mActive
+                        })
+                    }
+                }
+                if (mWinList.length === 0) {
+                    view.activeMenuItem = null
                 } else {
-                    menuWindow.menuCard.selectedIndex = -1
-                }
-            }
-        }
-    }
-
-    // 1. The Main Solid Dock Window
-    PanelWindow {
-        id: dockWindow
-        visible: root.opened && root.pluginEnabled && root.dockEnabled && root.isPinnedLoaded && !remapTimer.running
-
-        WlrLayershell.namespace: "omarchy-dock"
-        WlrLayershell.layer: WlrLayer.Top
-        WlrLayershell.keyboardFocus: root.isEditMode ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
-        exclusionMode: (root.opened && root.pluginEnabled && root.dockEnabled && root.isPinnedLoaded && visible && (!root.autohide || !root.shouldSlideOut)) ? ExclusionMode.Auto : ExclusionMode.Ignore
-        color: "transparent"
-
-        anchors {
-            top: root.barPosition === "bottom"
-            bottom: root.barPosition === "top"
-            left: root.barPosition === "right"
-            right: root.barPosition === "left"
-        }
-
-        margins {
-            bottom: (!root.isVertical && root.barPosition === "top") ? (Style.gapsOut || 5) : 0
-            top: (!root.isVertical && root.barPosition === "bottom") ? (Style.gapsOut || 5) : 0
-            right: (root.isVertical && root.barPosition === "left") ? (Style.gapsOut || 5) : 0
-            left: (root.isVertical && root.barPosition === "right") ? (Style.gapsOut || 5) : 0
-        }
-
-        implicitWidth: root.isVertical ? (root.slotSize + 8) : Math.max(root.slotSize + 8, root.totalDockDimension + 14)
-        implicitHeight: root.isVertical ? Math.max(root.slotSize + 8, root.totalDockDimension + 14) : (root.slotSize + 8)
-
-        HoverHandler {
-            id: dockHoverHandler
-            enabled: !root.autohide || !root.shouldSlideOut
-            onHoveredChanged: {
-                root.evaluateHoverState()
-            }
-        }
-
-        // 1.5-second delay before dock autohides when cursor leaves all dock/folder/widget elements
-        Timer {
-            id: autohideLeaveTimer
-            interval: 1500
-            repeat: false
-            onTriggered: {
-                var anyOpenWidget = root.checkWidgetPanelsOpen()
-                var anyHover = (dockHoverHandler && dockHoverHandler.hovered) || root.isStackHovered || root.isMenuHovered || root.isWidgetPanelHovered || anyOpenWidget
-                if (!anyHover) {
-                    root.isDockHovered = false
+                    view.activeMenuItem = {
+                        id: view.activeMenuItem.id,
+                        appId: view.activeMenuItem.appId,
+                        name: view.activeMenuItem.name,
+                        icon: view.activeMenuItem.icon,
+                        rawIcon: view.activeMenuItem.rawIcon,
+                        isStack: false,
+                        windows: mWinList
+                    }
                 }
             }
         }
 
-        // Main Visual Dock Card
-        Rectangle {
-            id: dockSurface
-            anchors.centerIn: parent
-            width: root.isVertical ? (root.slotSize + 4) : Math.max(root.slotSize + 4, root.totalDockDimension + 8)
-            height: root.isVertical ? Math.max(root.slotSize + 4, root.totalDockDimension + 8) : (root.slotSize + 4)
-            visible: root.opened && root.pluginEnabled && root.dockEnabled && root.isPinnedLoaded && !remapTimer.running
-            opacity: root.isDockVisualReady ? 1.0 : 0.0
-            Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-            focus: root.isEditMode
+        // Grouped-workspace model. Per surface, because a rail scoped to its own
+        // monitor has to group that monitor's workspaces - one shared answer
+        // cannot be right for both screens at once.
+        property var workspaceGroups: []
 
-            Keys.onEscapePressed: function(event) {
-                event.accepted = true
-                if (root.isStackOpen) {
-                    root.activeStackItem = null
+        onActiveStackItemChanged: {
+            if (activeStackItem) {
+                if (stackWindow && stackWindow.stackCard) stackWindow.stackCard.forceActiveFocus()
+            } else {
+                view.isEditingFolderTitle = false
+            }
+        }
+
+        function rebuildWorkspaceGroups() {
+            if (!root.groupByWorkspace) {
+                if (view.workspaceGroups.length > 0) view.workspaceGroups = []
+                return
+            }
+            var lib = root.shell ? root.shell.appLibrary : null
+            var allEntries = (typeof DesktopEntries !== "undefined" && DesktopEntries.applications && DesktopEntries.applications.values && DesktopEntries.applications.values.length > 0)
+                ? DesktopEntries.applications.values
+                : (lib && typeof lib.sortedEntries === "function" ? lib.sortedEntries("") : root.appRows)
+            var hyprTops = (Hyprland.toplevels && Hyprland.toplevels.values) ? Hyprland.toplevels.values : []
+            var wsList = (Hyprland.workspaces && Hyprland.workspaces.values) ? Hyprland.workspaces.values : []
+
+            view.workspaceGroups = WorkspaceModel.buildWorkspaceGroups(
+                hyprTops,
+                wsList,
+                root.knownWindows,
+                ToplevelManager.activeToplevel,
+                allEntries,
+                lib,
+                notifTracker.canonicalCounts,
+                notifTracker.canonicalUrgent,
+                {
+                    showEmpty: root.showEmptyWorkspaces,
+                    maxEmptyPlates: root.maxEmptyWorkspaces,
+                    padTo: root.paddedWorkspaceCount,
+                    monitorName: (root.workspaceScope === "monitor") ? view.dockMonitorName : "",
+                    excludeMonitors: root.excludeMonitors,
+                    stride: root.workspaceStride,
+                    screenCount: (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values.length : 1,
+                    maxItemsPerGroup: 0
+                })
+        }
+
+        // ------------------------------------------------ controller passthrough
+        // The folder popup, window menu and widget picker are handed this view as
+        // their `root`, so they reach per-surface state directly. Everything they
+        // need that belongs to the plugin as a whole is forwarded here, which keeps
+        // those three components unchanged.
+        readonly property var controller: root
+        readonly property var appMenuPosition: root.appMenuPosition
+        readonly property var availableFolderIcons: root.availableFolderIcons
+        readonly property var barPosition: root.barPosition
+        readonly property var dockEnabled: root.dockEnabled
+        readonly property var dockWidgets: root.dockWidgets
+        readonly property var iconRevision: root.iconRevision
+        readonly property var isBarTransparent: root.isBarTransparent
+        readonly property var isVertical: root.isVertical
+        readonly property var opened: root.opened
+        readonly property var pinnedIds: root.pinnedIds
+        readonly property var pluginEnabled: root.pluginEnabled
+        readonly property var showBadges: root.showBadges
+        readonly property var showFolderTitles: root.showFolderTitles
+        readonly property var systemBorderSize: root.systemBorderSize
+        readonly property var systemRounding: root.systemRounding
+        readonly property var widgetPosition: root.widgetPosition
+        function addDockWidget(widgetId) { return root.addDockWidget(widgetId) }
+        function clearBadge(itemData) { return root.clearBadge(itemData) }
+        function getFolderVisualSlot(itemIdx, dragIdx, targetIdx) { return root.getFolderVisualSlot(itemIdx, dragIdx, targetIdx) }
+        function removeDockWidget(widgetId, targetRegion) { return root.removeDockWidget(widgetId, targetRegion) }
+        function requestFocusOnLaunch(appId) { return root.requestFocusOnLaunch(appId) }
+        function resolveIcon(itemObj) { return root.resolveIcon(itemObj) }
+        function setAppMenuPosition(pos) { return root.setAppMenuPosition(pos) }
+        function setPinned(next) { return root.setPinned(next) }
+        function setWidgetPosition(pos) { return root.setWidgetPosition(pos) }
+
+        onMonitorEnabledChanged: if (!view.monitorEnabled) view.resetInteraction()
+
+        Component.onCompleted: root.registerView(view)
+        Component.onDestruction: root.unregisterView(view)
+
+        property int dockDragActiveIndex: -1
+        property int dockDragTargetIndex: -1
+        property int currentMergeTargetIndex: -1
+        property int folderDragActiveIndex: -1
+        property int folderDragTargetIndex: -1
+        function toggleStack(item, index) {
+            view.activeMenuItem = null
+            if (!item) {
+                view.activeStackItem = null
+                return
+            }
+            var itemId = item.id || item.appId || ""
+            if (view.activeStackItem && (view.activeStackItem.id === itemId || view.activeStackItem.appId === itemId || view.activeStackItemIndex === index)) {
+                view.activeStackItem = null
+            } else {
+                view.activeStackItemIndex = index
+                if (item.isStack) {
+                    view.activeStackItem = item
                 }
-                root.isEditMode = false
+            }
+        }
+        function toggleMenu(item, index, fromFolder) {
+            if (!item || !item.isStack) {
+                view.activeMenuItem = null
+                return
+            }
+            var appId = item.appId || item.id || ""
+            if (view.activeMenuItem && view.activeMenuItem.appId === appId) {
+                view.activeMenuItem = null
+            } else {
+                view.activeStackItem = null
+                view.isMenuFromFolder = false
+                view.activeMenuItemIndex = index
+                view.activeMenuItem = item
+            }
+        }
+        property bool isDockHovered: false
+        property bool isStackHovered: false
+        property bool isMenuHovered: false
+        property bool isWidgetPanelHovered: false
+        property var loadedWidgetItems: []
+        function checkWidgetPanelsOpen() {
+            for (var i = 0; i < view.loadedWidgetItems.length; i++) {
+                var w = view.loadedWidgetItems[i]
+                if (w) {
+                    if (w.opened === true) return true
+                    if (w.panelLoader && w.panelLoader.item && w.panelLoader.item.opened === true) return true
+                    if (w.panel && w.panel.open === true) return true
+                }
+            }
+            return false
+        }
+        function evaluateHoverState() {
+            var anyOpenWidget = checkWidgetPanelsOpen()
+            var isDockWinHovered = (!root.autohide || !view.shouldSlideOut) && dockHoverHandler && dockHoverHandler.hovered
+            var anyHover = isDockWinHovered || view.isStackHovered || view.isMenuHovered || view.isWidgetPanelHovered || anyOpenWidget
+            if (anyHover) {
+                autohideLeaveTimer.stop()
+                view.isDockHovered = true
+            } else {
+                autohideLeaveTimer.restart()
+            }
+        }
+        readonly property bool isDockActive: view.isDockHovered || view.isStackHovered || view.isMenuHovered || view.isWidgetPanelHovered || view.checkWidgetPanelsOpen() || (view.dockDragActiveIndex >= 0)
+        readonly property bool shouldSlideOut: root.autohide && !view.isDockActive && !root.isWorkspaceEmpty
+        function closeAllWidgetPanels() {
+            for (var i = 0; i < view.loadedWidgetItems.length; i++) {
+                var w = view.loadedWidgetItems[i]
+                if (w) {
+                    if (typeof w.close === "function") {
+                        w.close()
+                    }
+                    if (w.panelLoader && w.panelLoader.item && typeof w.panelLoader.item.close === "function") {
+                        w.panelLoader.item.close()
+                    }
+                    if (w.panel && typeof w.panel.close === "function") {
+                        w.panel.close()
+                    }
+                }
+            }
+        }
+        onShouldSlideOutChanged: {
+            if (shouldSlideOut) {
+                view.activeStackItem = null
+                view.activeMenuItem = null
+                view.isEditingFolderTitle = false
+                view.isEditMode = false
+                view.closeAllWidgetPanels()
+            }
+        }
+        readonly property real groupedRailExtent: root.isVertical ? workspaceRail.implicitHeight : workspaceRail.implicitWidth
+        readonly property real itemsWidth: root.groupByWorkspace
+            ? view.groupedRailExtent
+            : (root.dockItems.length * root.slotSize)
+        readonly property var activeScreen: (dockWindow && dockWindow.screen) ? dockWindow.screen : (Quickshell.screens.length > 0 ? Quickshell.screens[0] : null)
+        readonly property real logicalScreenWidth: (activeScreen && activeScreen.width > 0) ? activeScreen.width : 1200
+        readonly property real logicalScreenHeight: (activeScreen && activeScreen.height > 0) ? activeScreen.height : 675
+        readonly property real totalDockDimension: Math.max(root.slotSize,
+            (hasLeftWidgets ? (leftWidgetsWidth + leftSeparatorSize) : 0) +
+            itemsWidth +
+            (hasRightWidgets ? (rightSeparatorSize + rightWidgetsWidth) : 0))
+        property bool isEditMode: false
+        property var activeMenuItem: null
+        property int activeMenuItemIndex: 0
+        property bool isMenuFromFolder: false
+        property int activeMenuItemFolderIndex: 0
+        readonly property bool isMenuOpen: activeMenuItem !== null
+        property var activeStackItem: null
+        property int activeStackItemIndex: 0
+        property bool isEditingFolderTitle: false
+        readonly property bool isStackOpen: activeStackItem !== null
+        readonly property string dockMonitorName: {
+            try {
+                if (dockWindow && dockWindow.screen && dockWindow.screen.name) return String(dockWindow.screen.name)
+            } catch (e) {}
+            return ""
+        }
+        property int workspaceDropTargetId: -1
+        function workspaceGroupAt(sceneX, sceneY) {
+            var kids = workspaceRail.children
+            for (var i = 0; i < kids.length; i++) {
+                var candidate = kids[i]
+                if (!candidate || candidate.groupData === undefined || candidate.groupData === null) continue
+                var local = candidate.mapFromItem(null, sceneX, sceneY)
+                if (local.x >= 0 && local.y >= 0 && local.x < candidate.width && local.y < candidate.height)
+                    return candidate
+            }
+            return null
+        }
+        function updateWorkspaceDropTarget(sceneX, sceneY) {
+            var group = view.workspaceGroupAt(sceneX, sceneY)
+            var id = (group && group.groupData) ? Number(group.groupData.workspaceId) : -1
+            view.workspaceDropTargetId = isFinite(id) ? id : -1
+        }
+        function finishWorkspaceDrag(itemData, sourceWorkspaceId, sceneX, sceneY) {
+            var target = view.workspaceDropTargetId
+            view.workspaceDropTargetId = -1
+            if (!itemData || target <= 0) return
+            if (target === Number(sourceWorkspaceId)) return
+            root.moveItemToWorkspace(itemData, target)
+        }
+        readonly property real calculatedStackLeft: {
+            var screenW = (dockWindow && dockWindow.screen) ? dockWindow.screen.width : 1920
+            var dockW = root.isVertical ? (root.slotSize + 4) : (view.totalDockDimension + 8)
+            var dockLeft = (screenW - dockW) / 2
+            var appBaseOffset = (root.widgetPosition === "left" && root.hasWidgets) ? (root.widgetsWidth + root.separatorSize) : 0
+            var iconCenterX = dockLeft + 4 + appBaseOffset + view.activeStackItemIndex * root.slotSize + (root.slotSize / 2)
+            var cardW = (stackWindow && stackWindow.stackCard) ? stackWindow.stackCard.width : 180
+            return Math.round(Math.max(6, Math.min(screenW - cardW - 6, iconCenterX - cardW / 2)))
+        }
+        readonly property real calculatedStackTop: {
+            var screenH = (dockWindow && dockWindow.screen) ? dockWindow.screen.height : 1080
+            var dockH = root.isVertical ? (view.totalDockDimension + 8) : (root.slotSize + 4)
+            var dockTop = (screenH - dockH) / 2
+            var appBaseOffset = (root.widgetPosition === "left" && root.hasWidgets) ? (root.widgetsWidth + root.separatorSize) : 0
+            var iconCenterY = dockTop + 4 + appBaseOffset + view.activeStackItemIndex * root.slotSize + (root.slotSize / 2)
+            var cardH = (stackWindow && stackWindow.stackCard) ? stackWindow.stackCard.height : 180
+            return Math.round(Math.max(6, Math.min(screenH - cardH - 6, iconCenterY - cardH / 2)))
+        }
+        function closePopups() {
+            view.activeStackItem = null
+            view.activeMenuItem = null
+            view.isEditMode = false
+            view.isEditingFolderTitle = false
+            view.folderDragActiveIndex = -1
+            view.folderDragTargetIndex = -1
+            view.currentMergeTargetIndex = -1
+            if (widgetPicker) widgetPicker.opened = false
+            view.closeAllWidgetPanels()
+        }
+
+
+        // 1. Outside-click dismissal for Context Menu (closes ONLY the menu)
+        HyprlandFocusGrab {
+            id: menuGrab
+            active: view.isMenuOpen
+            windows: [menuWindow]
+            onCleared: {
+                view.activeMenuItem = null
+            }
+        }
+
+        // 3. Outside-click & Escape dismissal for Edit Mode
+        HyprlandFocusGrab {
+            id: editGrab
+            active: view.isEditMode && !view.isStackOpen && !view.isMenuOpen
+            windows: [dockWindow]
+            onCleared: {
+                view.isEditMode = false
+            }
+        }
+
+        onIsEditModeChanged: {
+            if (isEditMode) {
+                dockSurface.forceActiveFocus()
+            }
+        }
+
+        onIsStackOpenChanged: {
+            if (isStackOpen) {
+                if (stackWindow && stackWindow.stackCard) stackWindow.stackCard.forceActiveFocus()
+            }
+        }
+
+        onIsMenuOpenChanged: {
+            if (isMenuOpen) {
+                if (menuWindow && menuWindow.menuCard) {
+                    menuWindow.menuCard.forceActiveFocus()
+                    if (view.activeMenuItem && view.activeMenuItem.isStack) {
+                        var curIcon = view.activeMenuItem.icon || "grid"
+                        var foundIdx = root.availableFolderIcons.indexOf(curIcon)
+                        menuWindow.menuCard.selectedIndex = (foundIdx >= 0) ? foundIdx : 0
+                    } else {
+                        menuWindow.menuCard.selectedIndex = -1
+                    }
+                }
+            }
+        }
+
+        // 1. The Main Solid Dock Window
+        PanelWindow {
+            id: dockWindow
+            screen: view.dockScreen
+            visible: root.opened && root.pluginEnabled && root.dockEnabled && view.monitorEnabled
+                     && root.isPinnedLoaded && !remapTimer.running
+
+            WlrLayershell.namespace: "omarchy-dock"
+            WlrLayershell.layer: WlrLayer.Top
+            WlrLayershell.keyboardFocus: view.isEditMode ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
+            exclusionMode: (root.opened && root.pluginEnabled && root.dockEnabled && root.isPinnedLoaded && visible && (!root.autohide || !view.shouldSlideOut)) ? ExclusionMode.Auto : ExclusionMode.Ignore
+            color: "transparent"
+
+            anchors {
+                top: root.barPosition === "bottom"
+                bottom: root.barPosition === "top"
+                left: root.barPosition === "right"
+                right: root.barPosition === "left"
             }
 
-            color: root.isBarTransparent
-                ? Util.alpha(Color.bar.background, 0.25)
-                : Color.bar.background
-            border.width: root.isBarTransparent ? 0 : root.systemBorderSize
-            border.color: root.isBarTransparent ? "transparent" : Color.accent
-            radius: root.systemRounding
-            antialiasing: true
-            smooth: true
+            margins {
+                bottom: (!root.isVertical && root.barPosition === "top") ? (Style.gapsOut || 5) : 0
+                top: (!root.isVertical && root.barPosition === "bottom") ? (Style.gapsOut || 5) : 0
+                right: (root.isVertical && root.barPosition === "left") ? (Style.gapsOut || 5) : 0
+                left: (root.isVertical && root.barPosition === "right") ? (Style.gapsOut || 5) : 0
+            }
 
-            Behavior on color { ColorAnimation { duration: 300; easing.type: Easing.InOutCubic } }
-            Behavior on border.color { ColorAnimation { duration: 300; easing.type: Easing.InOutCubic } }
-            Behavior on border.width { NumberAnimation { duration: 250; easing.type: Easing.InOutCubic } }
+            implicitWidth: root.isVertical ? (root.slotSize + 8) : Math.max(root.slotSize + 8, view.totalDockDimension + 14)
+            implicitHeight: root.isVertical ? Math.max(root.slotSize + 8, view.totalDockDimension + 14) : (root.slotSize + 8)
 
-            MouseArea {
-                anchors.fill: parent
-                z: -1
-                acceptedButtons: Qt.LeftButton | Qt.RightButton
-                cursorShape: (root.dockDragActiveIndex >= 0) ? Qt.BlankCursor : (root.isEditMode ? Qt.PointingHandCursor : Qt.ArrowCursor)
-                onClicked: {
-                    root.isEditMode = false
-                    root.activeMenuItem = null
-                    root.activeStackItem = null
+            HoverHandler {
+                id: dockHoverHandler
+                enabled: !root.autohide || !view.shouldSlideOut
+                onHoveredChanged: {
+                    view.evaluateHoverState()
                 }
             }
 
-            transform: Translate {
-                id: autohideTranslate
-                x: {
-                    if (!root.autohide || !root.shouldSlideOut) return 0
-                    if (root.barPosition === "right") return -56
-                    if (root.barPosition === "left") return 56
-                    return 0
+            // 1.5-second delay before dock autohides when cursor leaves all dock/folder/widget elements
+            Timer {
+                id: autohideLeaveTimer
+                interval: 1500
+                repeat: false
+                onTriggered: {
+                    var anyOpenWidget = view.checkWidgetPanelsOpen()
+                    var anyHover = (dockHoverHandler && dockHoverHandler.hovered) || view.isStackHovered || view.isMenuHovered || view.isWidgetPanelHovered || anyOpenWidget
+                    if (!anyHover) {
+                        view.isDockHovered = false
+                    }
                 }
-                y: {
-                    if (!root.autohide || !root.shouldSlideOut) return 0
-                    if (root.barPosition === "top") return 56
-                    if (root.barPosition === "bottom") return -56
-                    return 0
-                }
-                Behavior on x { NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
-                Behavior on y { NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
             }
 
-            Behavior on radius { NumberAnimation { duration: 200 } }
-
-            Item {
-                id: dockContent
+            // Main Visual Dock Card
+            Rectangle {
+                id: dockSurface
                 anchors.centerIn: parent
-                width: root.isVertical ? root.slotSize : root.totalDockDimension
-                height: root.isVertical ? root.totalDockDimension : root.slotSize
+                width: root.isVertical ? (root.slotSize + 4) : Math.max(root.slotSize + 4, view.totalDockDimension + 8)
+                height: root.isVertical ? Math.max(root.slotSize + 4, view.totalDockDimension + 8) : (root.slotSize + 4)
+                visible: root.opened && root.pluginEnabled && root.dockEnabled && view.monitorEnabled
+                         && root.isPinnedLoaded && !remapTimer.running
+                opacity: root.isDockVisualReady ? 1.0 : 0.0
+                Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                focus: view.isEditMode
 
-                // 1. Left Dock Active Bar/Tray Widgets
-                Repeater {
-                    model: root.leftWidgetsList
+                Keys.onEscapePressed: function(event) {
+                    event.accepted = true
+                    if (view.isStackOpen) {
+                        view.activeStackItem = null
+                    }
+                    view.isEditMode = false
+                }
 
-                    Item {
-                        id: leftWidgetSlotRoot
-                        required property string modelData
-                        required property int index
+                color: root.isBarTransparent
+                    ? Util.alpha(Color.bar.background, 0.25)
+                    : Color.bar.background
+                border.width: root.isBarTransparent ? 0 : root.systemBorderSize
+                border.color: root.isBarTransparent ? "transparent" : Color.accent
+                radius: root.systemRounding
+                antialiasing: true
+                smooth: true
 
-                        readonly property real widgetSlotDimension: (modelData === "omarchy.clock" && !root.isVertical) ? root.clockSlotWidth : root.slotSize
-                        readonly property real widgetPos: root.getLeftWidgetOffset(index)
-                        x: root.isVertical ? 0 : widgetPos
-                        y: root.isVertical ? widgetPos : 0
-                        width: root.isVertical ? root.slotSize : widgetSlotDimension
-                        height: root.isVertical ? widgetSlotDimension : root.slotSize
-                        z: 1
+                Behavior on color { ColorAnimation { duration: 300; easing.type: Easing.InOutCubic } }
+                Behavior on border.color { ColorAnimation { duration: 300; easing.type: Easing.InOutCubic } }
+                Behavior on border.width { NumberAnimation { duration: 250; easing.type: Easing.InOutCubic } }
+
+                MouseArea {
+                    anchors.fill: parent
+                    z: -1
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    cursorShape: (view.dockDragActiveIndex >= 0) ? Qt.BlankCursor : (view.isEditMode ? Qt.PointingHandCursor : Qt.ArrowCursor)
+                    onClicked: {
+                        view.isEditMode = false
+                        view.activeMenuItem = null
+                        view.activeStackItem = null
+                    }
+                }
+
+                transform: Translate {
+                    id: autohideTranslate
+                    x: {
+                        if (!root.autohide || !view.shouldSlideOut) return 0
+                        if (root.barPosition === "right") return -56
+                        if (root.barPosition === "left") return 56
+                        return 0
+                    }
+                    y: {
+                        if (!root.autohide || !view.shouldSlideOut) return 0
+                        if (root.barPosition === "top") return 56
+                        if (root.barPosition === "bottom") return -56
+                        return 0
+                    }
+                    Behavior on x { NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
+                    Behavior on y { NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
+                }
+
+                Behavior on radius { NumberAnimation { duration: 200 } }
+
+                Item {
+                    id: dockContent
+                    anchors.centerIn: parent
+                    width: root.isVertical ? root.slotSize : view.totalDockDimension
+                    height: root.isVertical ? view.totalDockDimension : root.slotSize
+
+                    // 1. Left Dock Active Bar/Tray Widgets
+                    Repeater {
+                        model: root.leftWidgetsList
 
                         Item {
-                            id: leftWidgetWrapper
-                            x: Math.round((parent.width - width) / 2)
-                            y: Math.round((parent.height - height) / 2) - 1
-                            width: (modelData === "omarchy.clock" && !root.isVertical) ? (leftWidgetSlotRoot.width - 10) : root.iconBaseSize
-                            height: (modelData === "omarchy.clock" && root.isVertical) ? (root.slotSize - 8) : root.iconBaseSize
-                            scale: leftWidgetSlotMouse.containsMouse ? 1.10 : 1.0
-                            Behavior on scale { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                            id: leftWidgetSlotRoot
+                            required property string modelData
+                            required property int index
 
-                            Text {
-                                id: leftClockHorizontalLabel
-                                visible: modelData === "omarchy.clock" && !root.isVertical
-                                anchors.centerIn: parent
-                                text: (leftWidgetLoader.item && leftWidgetLoader.item.displayText) ? leftWidgetLoader.item.displayText : (root.clockDisplayText !== "" ? root.clockDisplayText : Qt.formatDateTime(new Date(), "dddd HH:mm"))
-                                font.family: Style.font.family
-                                font.pixelSize: 12
-                                font.weight: Font.Medium
-                                color: leftWidgetSlotMouse.containsMouse ? Color.accent : Color.composed("popups.text", "popups.text-alpha", Color.text, 0.95)
-                                renderType: Text.CurveRendering
-                                font.hintingPreference: Font.PreferNoHinting
-                                Behavior on color { ColorAnimation { duration: 120 } }
-                            }
+                            readonly property real widgetSlotDimension: (modelData === "omarchy.clock" && !root.isVertical) ? root.clockSlotWidth : root.slotSize
+                            readonly property real widgetPos: root.getLeftWidgetOffset(index)
+                            x: root.isVertical ? 0 : widgetPos
+                            y: root.isVertical ? widgetPos : 0
+                            width: root.isVertical ? root.slotSize : widgetSlotDimension
+                            height: root.isVertical ? widgetSlotDimension : root.slotSize
+                            z: 1
 
-                            Column {
-                                id: leftClockVerticalCol
-                                visible: modelData === "omarchy.clock" && root.isVertical
-                                anchors.centerIn: parent
-                                spacing: 1
+                            Item {
+                                id: leftWidgetWrapper
+                                x: Math.round((parent.width - width) / 2)
+                                y: Math.round((parent.height - height) / 2) - 1
+                                width: (modelData === "omarchy.clock" && !root.isVertical) ? (leftWidgetSlotRoot.width - 10) : root.iconBaseSize
+                                height: (modelData === "omarchy.clock" && root.isVertical) ? (root.slotSize - 8) : root.iconBaseSize
+                                scale: leftWidgetSlotMouse.containsMouse ? 1.10 : 1.0
+                                Behavior on scale { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
 
-                                Repeater {
-                                    model: (leftWidgetLoader.item && leftWidgetLoader.item.verticalLines && leftWidgetLoader.item.verticalLines.length > 0)
-                                           ? leftWidgetLoader.item.verticalLines
-                                           : [Qt.formatDateTime(new Date(), "HH"), Qt.formatDateTime(new Date(), "mm")]
+                                Text {
+                                    id: leftClockHorizontalLabel
+                                    visible: modelData === "omarchy.clock" && !root.isVertical
+                                    anchors.centerIn: parent
+                                    text: (leftWidgetLoader.item && leftWidgetLoader.item.displayText) ? leftWidgetLoader.item.displayText : (root.clockDisplayText !== "" ? root.clockDisplayText : Qt.formatDateTime(new Date(), "dddd HH:mm"))
+                                    font.family: Style.font.family
+                                    font.pixelSize: 12
+                                    font.weight: Font.Medium
+                                    color: leftWidgetSlotMouse.containsMouse ? Color.accent : Color.composed("popups.text", "popups.text-alpha", Color.text, 0.95)
+                                    renderType: Text.CurveRendering
+                                    font.hintingPreference: Font.PreferNoHinting
+                                    Behavior on color { ColorAnimation { duration: 120 } }
+                                }
 
-                                    Text {
-                                        required property string modelData
-                                        anchors.horizontalCenter: parent.horizontalCenter
-                                        text: modelData
-                                        font.family: Style.font.family
-                                        font.pixelSize: modelData.length > 3 ? 9 : 10
-                                        font.weight: Font.Medium
-                                        color: leftWidgetSlotMouse.containsMouse ? Color.accent : Color.composed("popups.text", "popups.text-alpha", Color.text, 0.95)
-                                        renderType: Text.CurveRendering
-                                        font.hintingPreference: Font.PreferNoHinting
+                                Column {
+                                    id: leftClockVerticalCol
+                                    visible: modelData === "omarchy.clock" && root.isVertical
+                                    anchors.centerIn: parent
+                                    spacing: 1
+
+                                    Repeater {
+                                        model: (leftWidgetLoader.item && leftWidgetLoader.item.verticalLines && leftWidgetLoader.item.verticalLines.length > 0)
+                                               ? leftWidgetLoader.item.verticalLines
+                                               : [Qt.formatDateTime(new Date(), "HH"), Qt.formatDateTime(new Date(), "mm")]
+
+                                        Text {
+                                            required property string modelData
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            text: modelData
+                                            font.family: Style.font.family
+                                            font.pixelSize: modelData.length > 3 ? 9 : 10
+                                            font.weight: Font.Medium
+                                            color: leftWidgetSlotMouse.containsMouse ? Color.accent : Color.composed("popups.text", "popups.text-alpha", Color.text, 0.95)
+                                            renderType: Text.CurveRendering
+                                            font.hintingPreference: Font.PreferNoHinting
+                                        }
+                                    }
+                                }
+
+                                DockGlyph {
+                                    id: leftWidgetGlyph
+                                    visible: modelData !== "omarchy.clock"
+                                    anchors.centerIn: parent
+                                    width: root.iconBaseSize
+                                    height: root.iconBaseSize
+                                    text: root.getWidgetIcon(modelData, leftWidgetLoader.item)
+                                    fontFamily: Style.font.family
+                                    fontSize: 22
+                                    color: leftWidgetSlotMouse.containsMouse ? Color.accent : Color.composed("popups.text", "popups.text-alpha", Color.text, 0.95)
+                                    Behavior on color { ColorAnimation { duration: 120 } }
+                                }
+
+                                Loader {
+                                    id: leftWidgetLoader
+                                    anchors.fill: parent
+                                    opacity: 0.0
+                                    source: root.getWidgetSource(modelData)
+                                    onLoaded: {
+                                        if (item) {
+                                            view.configureHostedWidget(item, modelData)
+                                            if (modelData === "omarchy.clock") {
+                                                if (item.displayText !== undefined) root.clockDisplayText = item.displayText
+                                                if (item.displayTextChanged) {
+                                                    item.displayTextChanged.connect(function() {
+                                                        root.clockDisplayText = item.displayText
+                                                    })
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
 
-                            DockGlyph {
-                                id: leftWidgetGlyph
-                                visible: modelData !== "omarchy.clock"
-                                anchors.centerIn: parent
-                                width: root.iconBaseSize
-                                height: root.iconBaseSize
-                                text: root.getWidgetIcon(modelData, leftWidgetLoader.item)
-                                fontFamily: Style.font.family
-                                fontSize: 22
-                                color: leftWidgetSlotMouse.containsMouse ? Color.accent : Color.composed("popups.text", "popups.text-alpha", Color.text, 0.95)
-                                Behavior on color { ColorAnimation { duration: 120 } }
-                            }
-
-                            Loader {
-                                id: leftWidgetLoader
+                            MouseArea {
+                                id: leftWidgetSlotMouse
                                 anchors.fill: parent
-                                opacity: 0.0
-                                source: root.getWidgetSource(modelData)
-                                onLoaded: {
-                                    if (item) {
-                                        root.configureHostedWidget(item, modelData)
-                                        if (modelData === "omarchy.clock") {
-                                            if (item.displayText !== undefined) root.clockDisplayText = item.displayText
-                                            if (item.displayTextChanged) {
-                                                item.displayTextChanged.connect(function() {
-                                                    root.clockDisplayText = item.displayText
-                                                })
+                                hoverEnabled: true
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+                                cursorShape: view.isEditMode ? Qt.ArrowCursor : Qt.PointingHandCursor
+                                onClicked: function(mouse) {
+                                    if (view.isEditMode) {
+                                        if (mouse.button === Qt.RightButton) {
+                                            view.isEditMode = false
+                                        }
+                                        return
+                                    }
+                                    if (modelData === "omarchy.apps") {
+                                        if (mouse.button === Qt.RightButton) {
+                                            Util.execDetached("omarchy-menu toggle root")
+                                        } else {
+                                            Util.execDetached("omarchy-menu toggle apps")
+                                        }
+                                        return
+                                    }
+                                    var target = leftWidgetLoader.item
+                                    if (target) {
+                                        view.configureHostedWidget(target, modelData)
+                                        if (mouse.button === Qt.RightButton) {
+                                            if (typeof target.cycleFormat === "function") {
+                                                target.cycleFormat()
+                                            }
+                                        } else if (mouse.button === Qt.MiddleButton) {
+                                            if (target.bar && typeof target.bar.run === "function") {
+                                                target.bar.run("omarchy-menu-timezone")
+                                            } else {
+                                                Util.execDetached("omarchy-menu-timezone")
+                                            }
+                                        } else {
+                                            if (typeof target.togglePanel === "function") {
+                                                target.togglePanel()
+                                            } else if (typeof target.toggle === "function") {
+                                                target.toggle()
+                                            } else if (typeof target.open === "function") {
+                                                if (target.opened) target.close()
+                                                else target.open()
                                             }
                                         }
                                     }
                                 }
                             }
                         }
+                    }
 
-                        MouseArea {
-                            id: leftWidgetSlotMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-                            cursorShape: root.isEditMode ? Qt.ArrowCursor : Qt.PointingHandCursor
-                            onClicked: function(mouse) {
-                                if (root.isEditMode) {
-                                    if (mouse.button === Qt.RightButton) {
-                                        root.isEditMode = false
-                                    }
-                                    return
-                                }
-                                if (modelData === "omarchy.apps") {
-                                    if (mouse.button === Qt.RightButton) {
-                                        Util.execDetached("omarchy-menu toggle root")
-                                    } else {
-                                        Util.execDetached("omarchy-menu toggle apps")
-                                    }
-                                    return
-                                }
-                                var target = leftWidgetLoader.item
-                                if (target) {
-                                    root.configureHostedWidget(target, modelData)
-                                    if (mouse.button === Qt.RightButton) {
-                                        if (typeof target.cycleFormat === "function") {
-                                            target.cycleFormat()
-                                        }
-                                    } else if (mouse.button === Qt.MiddleButton) {
-                                        if (target.bar && typeof target.bar.run === "function") {
-                                            target.bar.run("omarchy-menu-timezone")
-                                        } else {
-                                            Util.execDetached("omarchy-menu-timezone")
-                                        }
-                                    } else {
-                                        if (typeof target.togglePanel === "function") {
-                                            target.togglePanel()
-                                        } else if (typeof target.toggle === "function") {
-                                            target.toggle()
-                                        } else if (typeof target.open === "function") {
-                                            if (target.opened) target.close()
-                                            else target.open()
-                                        }
-                                    }
-                                }
-                            }
+                    // 2. Left Sleek Separator between Left Widgets and Apps
+                    Item {
+                        id: leftDockSeparator
+                        visible: root.hasLeftWidgets
+                        opacity: root.hasLeftWidgets ? 1.0 : 0.0
+                        x: root.isVertical ? 0 : root.leftWidgetsWidth
+                        y: root.isVertical ? root.leftWidgetsWidth : 0
+                        width: root.isVertical ? root.slotSize : root.leftSeparatorSize
+                        height: root.isVertical ? root.leftSeparatorSize : root.slotSize
+                        z: 0
+
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: root.isVertical ? (root.slotSize - 18) : 1.5
+                            height: root.isVertical ? 1.5 : (root.slotSize - 18)
+                            radius: 0.75
+                            color: Color.composed("popups.border", "popups.border-alpha", Color.border, 0.45)
                         }
                     }
-                }
 
-                // 2. Left Sleek Separator between Left Widgets and Apps
-                Item {
-                    id: leftDockSeparator
-                    visible: root.hasLeftWidgets
-                    opacity: root.hasLeftWidgets ? 1.0 : 0.0
-                    x: root.isVertical ? 0 : root.leftWidgetsWidth
-                    y: root.isVertical ? root.leftWidgetsWidth : 0
-                    width: root.isVertical ? root.slotSize : root.leftSeparatorSize
-                    height: root.isVertical ? root.leftSeparatorSize : root.slotSize
-                    z: 0
-
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: root.isVertical ? (root.slotSize - 18) : 1.5
-                        height: root.isVertical ? 1.5 : (root.slotSize - 18)
-                        radius: 0.75
-                        color: Color.composed("popups.border", "popups.border-alpha", Color.border, 0.45)
-                    }
-                }
-
-                // 3. Applications & Folders
-                Repeater {
-                    model: root.groupByWorkspace ? [] : root.dockItems
-
-                    DockItem {
-                        itemData: modelData
-                        itemIndex: index
-                        totalCount: root.dockItems.length
-                        barPosition: root.barPosition
-                        shell: root.shell
-                        slotSize: root.slotSize
-                        iconBaseSize: root.iconBaseSize
-                        iconRevision: root.iconRevision
-                        iconsReady: root.iconsReady
-                        systemBorderSize: root.systemBorderSize
-                        systemRounding: root.systemRounding
-                        isSelected: (!root.isMenuFromFolder && root.activeMenuItem && (root.activeMenuItem.appId === modelData.appId || root.activeMenuItem.id === modelData.id)) || (root.activeStackItem && (root.activeStackItem.id === modelData.id || root.activeStackItem.appId === modelData.appId))
-                        isMergeTarget: (root.currentMergeTargetIndex === index)
-
-                        // 1D Live Rail Displacement (with Left Widget offset)
-                        readonly property real appBaseOffset: (root.hasLeftWidgets ? (root.leftWidgetsWidth + root.leftSeparatorSize) : 0)
-                        readonly property int visualSlot: (root.dockDragActiveIndex === index) ? index : root.getDockVisualSlot(index, root.dockDragActiveIndex, root.dockDragTargetIndex)
-                        x: root.isVertical ? 0 : (appBaseOffset + visualSlot * root.slotSize)
-                        y: root.isVertical ? (appBaseOffset + visualSlot * root.slotSize) : 0
-
-                        Behavior on x { enabled: root.dockDragActiveIndex >= 0; NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
-                        Behavior on y { enabled: root.dockDragActiveIndex >= 0; NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
-
-                        isEditMode: root.isEditMode
-                        showBadges: root.showBadges
-                        dockDragActiveIndex: root.dockDragActiveIndex
-
-                        onEditModeRequested: {
-                            root.isEditMode = true
-                            root.activeMenuItem = null
-                        }
-
-                        onEditModeExitRequested: {
-                            root.isEditMode = false
-                        }
-
-                        onTogglePinRequested: function(appId) {
-                            root.setPinned(DockModel.togglePinned(root.pinnedIds, appId, root.maxDockItems))
-                        }
-
-                        onOriginalAppLaunched: function(appId) {
-                            root.requestFocusOnLaunch(appId)
-                        }
-
-                        onDissolveRequested: function(stackId) {
-                            root.setPinned(DockModel.dissolveStack(root.pinnedIds, stackId))
-                            root.isEditMode = false
-                        }
-
-                        onItemLeftClicked: function(item) {
-                            if (item && !item.isStack) {
-                                root.clearBadge(item)
-                            }
-                            if (item && item.isStack) {
-                                root.toggleStack(item, index)
-                            } else {
-                                root.activeStackItem = null
-                                root.activeMenuItem = null
-                                if (root.isEditMode) return
-                            }
-                        }
-
-                        onItemRightClicked: function(item, targetItem) {
-                            if (root.isEditMode) {
-                                root.isEditMode = false
-                                return
-                            }
-                            if (item && (item.isStack || (item.isRunning && item.toplevels && item.toplevels.length >= 2))) {
-                                root.toggleMenu(item, index, false)
-                            }
-                        }
-
-                        onDragStarted: function(fromIdx) {
-                            root.dockDragActiveIndex = fromIdx
-                        }
-
-                        onDragHoverChanged: function(fromIdx, targetIdx, isMergeIntent) {
-                            root.dockDragActiveIndex = (targetIdx >= 0) ? fromIdx : -1
-                            root.dockDragTargetIndex = isMergeIntent ? -1 : targetIdx
-                            root.currentMergeTargetIndex = isMergeIntent ? targetIdx : -1
-                        }
-
-                        onMoveRequested: function(fromIdx, toIdx) {
-                            root.dockDragActiveIndex = -1
-                            root.dockDragTargetIndex = -1
-                            root.currentMergeTargetIndex = -1
-                            root.setPinned(DockModel.reorderPinned(root.pinnedIds, root.dockItems, fromIdx, toIdx))
-                        }
-
-                        onMergeRequested: function(fromIdx, targetIdx) {
-                            root.dockDragActiveIndex = -1
-                            root.dockDragTargetIndex = -1
-                            root.currentMergeTargetIndex = -1
-                            root.setPinned(DockModel.mergeIntoStack(root.pinnedIds, root.dockItems, fromIdx, targetIdx))
-                        }
-                    }
-                }
-
-                // 3b. Workspace-grouped rail. A positioner rather than the
-                // absolute slot maths of the flat rail: plate width varies with
-                // how many applications a workspace holds, and itemsWidth reads
-                // the measured extent back so separators and the right-hand
-                // widgets keep lining up.
-                Grid {
-                    id: workspaceRail
-                    visible: root.groupByWorkspace
-                    readonly property real railBaseOffset: (root.hasLeftWidgets ? (root.leftWidgetsWidth + root.leftSeparatorSize) : 0)
-                    x: root.isVertical ? 0 : railBaseOffset
-                    y: root.isVertical ? railBaseOffset : 0
-                    z: 1
-                    spacing: root.workspaceGroupGap
-                    // One row along a horizontal dock, one column along a
-                    // vertical one - the same positioner serves both.
-                    columns: root.isVertical ? 1 : Math.max(1, root.workspaceGroups.length)
-
+                    // 3. Applications & Folders
                     Repeater {
-                        model: root.groupByWorkspace ? root.workspaceGroups : []
+                        model: root.groupByWorkspace ? [] : view.visibleDockItems
 
-                        WorkspaceGroup {
-                            required property var modelData
-
-                            groupData: modelData
+                        DockItem {
+                            itemData: modelData
+                            itemIndex: index
+                            totalCount: view.visibleDockItems.length
                             barPosition: root.barPosition
                             shell: root.shell
                             slotSize: root.slotSize
@@ -2186,364 +2222,501 @@ Item {
                             iconsReady: root.iconsReady
                             systemBorderSize: root.systemBorderSize
                             systemRounding: root.systemRounding
-                            showBadges: root.showBadges
-                            isDropTarget: root.workspaceDropTargetId > 0
-                                && root.workspaceDropTargetId === Number(modelData.workspaceId)
+                            isSelected: (!view.isMenuFromFolder && view.activeMenuItem && (view.activeMenuItem.appId === modelData.appId || view.activeMenuItem.id === modelData.id)) || (view.activeStackItem && (view.activeStackItem.id === modelData.id || view.activeStackItem.appId === modelData.appId))
+                            isMergeTarget: (view.currentMergeTargetIndex === index)
 
-                            onWorkspaceActivated: function(group) { root.activateWorkspace(group) }
-                            onItemLaunched: function(appId) { root.requestFocusOnLaunch(appId) }
-                            onItemDragMoved: function(itemData, sourceWorkspaceId, sceneX, sceneY) {
-                                root.updateWorkspaceDropTarget(sceneX, sceneY)
+                            // 1D Live Rail Displacement (with Left Widget offset)
+                            readonly property real appBaseOffset: (root.hasLeftWidgets ? (root.leftWidgetsWidth + root.leftSeparatorSize) : 0)
+                            readonly property int visualSlot: (view.dockDragActiveIndex === index) ? index : root.getDockVisualSlot(index, view.dockDragActiveIndex, view.dockDragTargetIndex)
+                            x: root.isVertical ? 0 : (appBaseOffset + visualSlot * root.slotSize)
+                            y: root.isVertical ? (appBaseOffset + visualSlot * root.slotSize) : 0
+
+                            Behavior on x { enabled: view.dockDragActiveIndex >= 0; NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
+                            Behavior on y { enabled: view.dockDragActiveIndex >= 0; NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
+
+                            isEditMode: view.isEditMode
+                            showBadges: root.showBadges
+                            dockDragActiveIndex: view.dockDragActiveIndex
+
+                            onEditModeRequested: {
+                                view.isEditMode = true
+                                view.activeMenuItem = null
                             }
-                            onItemDragDropped: function(itemData, sourceWorkspaceId, sceneX, sceneY) {
-                                root.finishWorkspaceDrag(itemData, sourceWorkspaceId, sceneX, sceneY)
+
+                            onEditModeExitRequested: {
+                                view.isEditMode = false
                             }
-                            onItemDragCanceled: root.workspaceDropTargetId = -1
+
+                            onTogglePinRequested: function(appId) {
+                                root.setPinned(DockModel.togglePinned(root.pinnedIds, appId, view.maxDockItems))
+                            }
+
+                            onOriginalAppLaunched: function(appId) {
+                                root.requestFocusOnLaunch(appId)
+                            }
+
+                            onDissolveRequested: function(stackId) {
+                                root.setPinned(DockModel.dissolveStack(root.pinnedIds, stackId))
+                                view.isEditMode = false
+                            }
+
+                            onItemLeftClicked: function(item) {
+                                if (item && !item.isStack) {
+                                    root.clearBadge(item)
+                                }
+                                if (item && item.isStack) {
+                                    view.toggleStack(item, index)
+                                } else {
+                                    view.activeStackItem = null
+                                    view.activeMenuItem = null
+                                    if (view.isEditMode) return
+                                }
+                            }
+
+                            onItemRightClicked: function(item, targetItem) {
+                                if (view.isEditMode) {
+                                    view.isEditMode = false
+                                    return
+                                }
+                                if (item && (item.isStack || (item.isRunning && item.toplevels && item.toplevels.length >= 2))) {
+                                    view.toggleMenu(item, index, false)
+                                }
+                            }
+
+                            onDragStarted: function(fromIdx) {
+                                view.dockDragActiveIndex = fromIdx
+                            }
+
+                            onDragHoverChanged: function(fromIdx, targetIdx, isMergeIntent) {
+                                view.dockDragActiveIndex = (targetIdx >= 0) ? fromIdx : -1
+                                view.dockDragTargetIndex = isMergeIntent ? -1 : targetIdx
+                                view.currentMergeTargetIndex = isMergeIntent ? targetIdx : -1
+                            }
+
+                            onMoveRequested: function(fromIdx, toIdx) {
+                                view.dockDragActiveIndex = -1
+                                view.dockDragTargetIndex = -1
+                                view.currentMergeTargetIndex = -1
+                                root.setPinned(DockModel.reorderPinned(root.pinnedIds, root.dockItems, fromIdx, toIdx))
+                            }
+
+                            onMergeRequested: function(fromIdx, targetIdx) {
+                                view.dockDragActiveIndex = -1
+                                view.dockDragTargetIndex = -1
+                                view.currentMergeTargetIndex = -1
+                                root.setPinned(DockModel.mergeIntoStack(root.pinnedIds, root.dockItems, fromIdx, targetIdx))
+                            }
                         }
                     }
-                }
 
-                // 4. Right Sleek Separator between Apps and Right Widgets
-                Item {
-                    id: rightDockSeparator
-                    visible: root.hasRightWidgets
-                    opacity: root.hasRightWidgets ? 1.0 : 0.0
-                    readonly property real rSepOffset: (root.hasLeftWidgets ? (root.leftWidgetsWidth + root.leftSeparatorSize) : 0) + root.itemsWidth
-                    x: root.isVertical ? 0 : rSepOffset
-                    y: root.isVertical ? rSepOffset : 0
-                    width: root.isVertical ? root.slotSize : root.rightSeparatorSize
-                    height: root.isVertical ? root.rightSeparatorSize : root.slotSize
-                    z: 0
-
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: root.isVertical ? (root.slotSize - 18) : 1.5
-                        height: root.isVertical ? 1.5 : (root.slotSize - 18)
-                        radius: 0.75
-                        color: Color.composed("popups.border", "popups.border-alpha", Color.border, 0.45)
-                    }
-                }
-
-                // 5. Right Dock Active Bar/Tray Widgets
-                Repeater {
-                    model: root.rightWidgetsList
-
-                    Item {
-                        id: rightWidgetSlotRoot
-                        required property string modelData
-                        required property int index
-
-                        readonly property real rWidgetBaseOffset: (root.hasLeftWidgets ? (root.leftWidgetsWidth + root.leftSeparatorSize) : 0) + root.itemsWidth + root.rightSeparatorSize
-                        readonly property real rWidgetSlotDimension: (modelData === "omarchy.clock" && !root.isVertical) ? root.clockSlotWidth : root.slotSize
-                        readonly property real rWidgetPos: rWidgetBaseOffset + root.getRightWidgetOffset(index)
-                        x: root.isVertical ? 0 : rWidgetPos
-                        y: root.isVertical ? rWidgetPos : 0
-                        width: root.isVertical ? root.slotSize : rWidgetSlotDimension
-                        height: root.isVertical ? rWidgetSlotDimension : root.slotSize
+                    // 3b. Workspace-grouped rail. A positioner rather than the
+                    // absolute slot maths of the flat rail: plate width varies with
+                    // how many applications a workspace holds, and itemsWidth reads
+                    // the measured extent back so separators and the right-hand
+                    // widgets keep lining up.
+                    Grid {
+                        id: workspaceRail
+                        visible: root.groupByWorkspace
+                        readonly property real railBaseOffset: (root.hasLeftWidgets ? (root.leftWidgetsWidth + root.leftSeparatorSize) : 0)
+                        x: root.isVertical ? 0 : railBaseOffset
+                        y: root.isVertical ? railBaseOffset : 0
                         z: 1
+                        spacing: root.workspaceGroupGap
+                        // One row along a horizontal dock, one column along a
+                        // vertical one - the same positioner serves both.
+                        columns: root.isVertical ? 1 : Math.max(1, view.workspaceGroups.length)
+
+                        Repeater {
+                            model: root.groupByWorkspace ? view.workspaceGroups : []
+
+                            WorkspaceGroup {
+                                required property var modelData
+
+                                groupData: modelData
+                                barPosition: root.barPosition
+                                shell: root.shell
+                                slotSize: root.slotSize
+                                iconBaseSize: root.iconBaseSize
+                                iconRevision: root.iconRevision
+                                iconsReady: root.iconsReady
+                                systemBorderSize: root.systemBorderSize
+                                systemRounding: root.systemRounding
+                                showBadges: root.showBadges
+                                isDropTarget: view.workspaceDropTargetId > 0
+                                    && view.workspaceDropTargetId === Number(modelData.workspaceId)
+
+                                onWorkspaceActivated: function(group) { root.activateWorkspace(group) }
+                                onItemLaunched: function(appId) { root.requestFocusOnLaunch(appId) }
+                                onItemDragMoved: function(itemData, sourceWorkspaceId, sceneX, sceneY) {
+                                    view.updateWorkspaceDropTarget(sceneX, sceneY)
+                                }
+                                onItemDragDropped: function(itemData, sourceWorkspaceId, sceneX, sceneY) {
+                                    view.finishWorkspaceDrag(itemData, sourceWorkspaceId, sceneX, sceneY)
+                                }
+                                onItemDragCanceled: view.workspaceDropTargetId = -1
+                            }
+                        }
+                    }
+
+                    // 4. Right Sleek Separator between Apps and Right Widgets
+                    Item {
+                        id: rightDockSeparator
+                        visible: root.hasRightWidgets
+                        opacity: root.hasRightWidgets ? 1.0 : 0.0
+                        readonly property real rSepOffset: (root.hasLeftWidgets ? (root.leftWidgetsWidth + root.leftSeparatorSize) : 0) + view.itemsWidth
+                        x: root.isVertical ? 0 : rSepOffset
+                        y: root.isVertical ? rSepOffset : 0
+                        width: root.isVertical ? root.slotSize : root.rightSeparatorSize
+                        height: root.isVertical ? root.rightSeparatorSize : root.slotSize
+                        z: 0
+
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: root.isVertical ? (root.slotSize - 18) : 1.5
+                            height: root.isVertical ? 1.5 : (root.slotSize - 18)
+                            radius: 0.75
+                            color: Color.composed("popups.border", "popups.border-alpha", Color.border, 0.45)
+                        }
+                    }
+
+                    // 5. Right Dock Active Bar/Tray Widgets
+                    Repeater {
+                        model: root.rightWidgetsList
 
                         Item {
-                            id: rightWidgetWrapper
-                            x: Math.round((parent.width - width) / 2)
-                            y: Math.round((parent.height - height) / 2) - 1
-                            width: (modelData === "omarchy.clock" && !root.isVertical) ? (rightWidgetSlotRoot.width - 10) : root.iconBaseSize
-                            height: (modelData === "omarchy.clock" && root.isVertical) ? (root.slotSize - 8) : root.iconBaseSize
-                            scale: rightWidgetSlotMouse.containsMouse ? 1.10 : 1.0
-                            Behavior on scale { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                            id: rightWidgetSlotRoot
+                            required property string modelData
+                            required property int index
 
-                            Text {
-                                id: rightClockHorizontalLabel
-                                visible: modelData === "omarchy.clock" && !root.isVertical
-                                anchors.centerIn: parent
-                                text: (rightWidgetLoader.item && rightWidgetLoader.item.displayText) ? rightWidgetLoader.item.displayText : (root.clockDisplayText !== "" ? root.clockDisplayText : Qt.formatDateTime(new Date(), "dddd HH:mm"))
-                                font.family: Style.font.family
-                                font.pixelSize: 12
-                                font.weight: Font.Medium
-                                color: rightWidgetSlotMouse.containsMouse ? Color.accent : Color.composed("popups.text", "popups.text-alpha", Color.text, 0.95)
-                                renderType: Text.CurveRendering
-                                font.hintingPreference: Font.PreferNoHinting
-                                Behavior on color { ColorAnimation { duration: 120 } }
-                            }
+                            readonly property real rWidgetBaseOffset: (root.hasLeftWidgets ? (root.leftWidgetsWidth + root.leftSeparatorSize) : 0) + view.itemsWidth + root.rightSeparatorSize
+                            readonly property real rWidgetSlotDimension: (modelData === "omarchy.clock" && !root.isVertical) ? root.clockSlotWidth : root.slotSize
+                            readonly property real rWidgetPos: rWidgetBaseOffset + root.getRightWidgetOffset(index)
+                            x: root.isVertical ? 0 : rWidgetPos
+                            y: root.isVertical ? rWidgetPos : 0
+                            width: root.isVertical ? root.slotSize : rWidgetSlotDimension
+                            height: root.isVertical ? rWidgetSlotDimension : root.slotSize
+                            z: 1
 
-                            Column {
-                                id: rightClockVerticalCol
-                                visible: modelData === "omarchy.clock" && root.isVertical
-                                anchors.centerIn: parent
-                                spacing: 1
+                            Item {
+                                id: rightWidgetWrapper
+                                x: Math.round((parent.width - width) / 2)
+                                y: Math.round((parent.height - height) / 2) - 1
+                                width: (modelData === "omarchy.clock" && !root.isVertical) ? (rightWidgetSlotRoot.width - 10) : root.iconBaseSize
+                                height: (modelData === "omarchy.clock" && root.isVertical) ? (root.slotSize - 8) : root.iconBaseSize
+                                scale: rightWidgetSlotMouse.containsMouse ? 1.10 : 1.0
+                                Behavior on scale { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
 
-                                Repeater {
-                                    model: (rightWidgetLoader.item && rightWidgetLoader.item.verticalLines && rightWidgetLoader.item.verticalLines.length > 0)
-                                           ? rightWidgetLoader.item.verticalLines
-                                           : [Qt.formatDateTime(new Date(), "HH"), Qt.formatDateTime(new Date(), "mm")]
+                                Text {
+                                    id: rightClockHorizontalLabel
+                                    visible: modelData === "omarchy.clock" && !root.isVertical
+                                    anchors.centerIn: parent
+                                    text: (rightWidgetLoader.item && rightWidgetLoader.item.displayText) ? rightWidgetLoader.item.displayText : (root.clockDisplayText !== "" ? root.clockDisplayText : Qt.formatDateTime(new Date(), "dddd HH:mm"))
+                                    font.family: Style.font.family
+                                    font.pixelSize: 12
+                                    font.weight: Font.Medium
+                                    color: rightWidgetSlotMouse.containsMouse ? Color.accent : Color.composed("popups.text", "popups.text-alpha", Color.text, 0.95)
+                                    renderType: Text.CurveRendering
+                                    font.hintingPreference: Font.PreferNoHinting
+                                    Behavior on color { ColorAnimation { duration: 120 } }
+                                }
 
-                                    Text {
-                                        required property string modelData
-                                        anchors.horizontalCenter: parent.horizontalCenter
-                                        text: modelData
-                                        font.family: Style.font.family
-                                        font.pixelSize: modelData.length > 3 ? 9 : 10
-                                        font.weight: Font.Medium
-                                        color: rightWidgetSlotMouse.containsMouse ? Color.accent : Color.composed("popups.text", "popups.text-alpha", Color.text, 0.95)
-                                        renderType: Text.CurveRendering
-                                        font.hintingPreference: Font.PreferNoHinting
+                                Column {
+                                    id: rightClockVerticalCol
+                                    visible: modelData === "omarchy.clock" && root.isVertical
+                                    anchors.centerIn: parent
+                                    spacing: 1
+
+                                    Repeater {
+                                        model: (rightWidgetLoader.item && rightWidgetLoader.item.verticalLines && rightWidgetLoader.item.verticalLines.length > 0)
+                                               ? rightWidgetLoader.item.verticalLines
+                                               : [Qt.formatDateTime(new Date(), "HH"), Qt.formatDateTime(new Date(), "mm")]
+
+                                        Text {
+                                            required property string modelData
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            text: modelData
+                                            font.family: Style.font.family
+                                            font.pixelSize: modelData.length > 3 ? 9 : 10
+                                            font.weight: Font.Medium
+                                            color: rightWidgetSlotMouse.containsMouse ? Color.accent : Color.composed("popups.text", "popups.text-alpha", Color.text, 0.95)
+                                            renderType: Text.CurveRendering
+                                            font.hintingPreference: Font.PreferNoHinting
+                                        }
+                                    }
+                                }
+
+                                DockGlyph {
+                                    id: rightWidgetGlyph
+                                    visible: modelData !== "omarchy.clock"
+                                    anchors.centerIn: parent
+                                    width: root.iconBaseSize
+                                    height: root.iconBaseSize
+                                    text: root.getWidgetIcon(modelData, rightWidgetLoader.item)
+                                    fontFamily: Style.font.family
+                                    fontSize: 22
+                                    color: rightWidgetSlotMouse.containsMouse ? Color.accent : Color.composed("popups.text", "popups.text-alpha", Color.text, 0.95)
+                                    Behavior on color { ColorAnimation { duration: 120 } }
+                                }
+
+                                Loader {
+                                    id: rightWidgetLoader
+                                    anchors.fill: parent
+                                    opacity: 0.0
+                                    source: root.getWidgetSource(modelData)
+                                    onLoaded: {
+                                        if (item) {
+                                            view.configureHostedWidget(item, modelData)
+                                            if (modelData === "omarchy.clock") {
+                                                if (item.displayText !== undefined) root.clockDisplayText = item.displayText
+                                                if (item.displayTextChanged) {
+                                                    item.displayTextChanged.connect(function() {
+                                                        root.clockDisplayText = item.displayText
+                                                    })
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
 
-                            DockGlyph {
-                                id: rightWidgetGlyph
-                                visible: modelData !== "omarchy.clock"
-                                anchors.centerIn: parent
-                                width: root.iconBaseSize
-                                height: root.iconBaseSize
-                                text: root.getWidgetIcon(modelData, rightWidgetLoader.item)
-                                fontFamily: Style.font.family
-                                fontSize: 22
-                                color: rightWidgetSlotMouse.containsMouse ? Color.accent : Color.composed("popups.text", "popups.text-alpha", Color.text, 0.95)
-                                Behavior on color { ColorAnimation { duration: 120 } }
-                            }
-
-                            Loader {
-                                id: rightWidgetLoader
+                            MouseArea {
+                                id: rightWidgetSlotMouse
                                 anchors.fill: parent
-                                opacity: 0.0
-                                source: root.getWidgetSource(modelData)
-                                onLoaded: {
-                                    if (item) {
-                                        root.configureHostedWidget(item, modelData)
-                                        if (modelData === "omarchy.clock") {
-                                            if (item.displayText !== undefined) root.clockDisplayText = item.displayText
-                                            if (item.displayTextChanged) {
-                                                item.displayTextChanged.connect(function() {
-                                                    root.clockDisplayText = item.displayText
-                                                })
+                                hoverEnabled: true
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+                                cursorShape: view.isEditMode ? Qt.ArrowCursor : Qt.PointingHandCursor
+                                onClicked: function(mouse) {
+                                    if (view.isEditMode) {
+                                        if (mouse.button === Qt.RightButton) {
+                                            view.isEditMode = false
+                                        }
+                                        return
+                                    }
+                                    if (modelData === "omarchy.apps") {
+                                        if (mouse.button === Qt.RightButton) {
+                                            Util.execDetached("omarchy-menu toggle root")
+                                        } else {
+                                            Util.execDetached("omarchy-menu toggle apps")
+                                        }
+                                        return
+                                    }
+                                    var target = rightWidgetLoader.item
+                                    if (target) {
+                                        view.configureHostedWidget(target, modelData)
+                                        if (mouse.button === Qt.RightButton) {
+                                            if (typeof target.cycleFormat === "function") {
+                                                target.cycleFormat()
+                                            }
+                                        } else if (mouse.button === Qt.MiddleButton) {
+                                            if (target.bar && typeof target.bar.run === "function") {
+                                                target.bar.run("omarchy-menu-timezone")
+                                            } else {
+                                                Util.execDetached("omarchy-menu-timezone")
+                                            }
+                                        } else {
+                                            if (typeof target.togglePanel === "function") {
+                                                target.togglePanel()
+                                            } else if (typeof target.toggle === "function") {
+                                                target.toggle()
+                                            } else if (typeof target.open === "function") {
+                                                if (target.opened) target.close()
+                                                else target.open()
                                             }
                                         }
                                     }
                                 }
                             }
                         }
+                    }
+                }
 
-                        MouseArea {
-                            id: rightWidgetSlotMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-                            cursorShape: root.isEditMode ? Qt.ArrowCursor : Qt.PointingHandCursor
-                            onClicked: function(mouse) {
-                                if (root.isEditMode) {
-                                    if (mouse.button === Qt.RightButton) {
-                                        root.isEditMode = false
-                                    }
-                                    return
-                                }
-                                if (modelData === "omarchy.apps") {
-                                    if (mouse.button === Qt.RightButton) {
-                                        Util.execDetached("omarchy-menu toggle root")
-                                    } else {
-                                        Util.execDetached("omarchy-menu toggle apps")
-                                    }
-                                    return
-                                }
-                                var target = rightWidgetLoader.item
-                                if (target) {
-                                    root.configureHostedWidget(target, modelData)
-                                    if (mouse.button === Qt.RightButton) {
-                                        if (typeof target.cycleFormat === "function") {
-                                            target.cycleFormat()
-                                        }
-                                    } else if (mouse.button === Qt.MiddleButton) {
-                                        if (target.bar && typeof target.bar.run === "function") {
-                                            target.bar.run("omarchy-menu-timezone")
-                                        } else {
-                                            Util.execDetached("omarchy-menu-timezone")
-                                        }
-                                    } else {
-                                        if (typeof target.togglePanel === "function") {
-                                            target.togglePanel()
-                                        } else if (typeof target.toggle === "function") {
-                                            target.toggle()
-                                        } else if (typeof target.open === "function") {
-                                            if (target.opened) target.close()
-                                            else target.open()
-                                        }
-                                    }
-                                }
-                            }
+                // Invisible anchor for strictly center-of-screen popup panels
+                Item {
+                    id: screenCenterAnchor
+                    anchors.centerIn: parent
+                    width: root.slotSize
+                    height: root.slotSize
+                    visible: false
+                }
+            }
+        }
+
+        function configureHostedWidget(item, widgetId) {
+            if (!item) return
+            if (view.loadedWidgetItems.indexOf(item) === -1) view.loadedWidgetItems.push(item)
+            if ("bar" in item) item.bar = dockBarContext
+            if ("moduleName" in item) item.moduleName = widgetId
+
+            function applyToPanel(p) {
+                if (!p) return
+                if ("centerOnBar" in p) {
+                    p.centerOnBar = true
+                }
+                if ("bar" in p) {
+                    p.bar = dockBarContext
+                }
+                if ("anchorItem" in p) {
+                    p.anchorItem = screenCenterAnchor
+                }
+                if ("opened" in p && p.openedChanged) {
+                    p.openedChanged.connect(function() {
+                        view.evaluateHoverState()
+                    })
+                }
+                if ("open" in p && p.openChanged) {
+                    p.openChanged.connect(function() {
+                        view.evaluateHoverState()
+                    })
+                }
+            }
+
+            function scan(obj) {
+                if (!obj) return
+                applyToPanel(obj)
+                if (obj.panel) {
+                    applyToPanel(obj.panel)
+                }
+                if (obj.data) {
+                    for (var i = 0; i < obj.data.length; i++) {
+                        var d = obj.data[i]
+                        if (d) {
+                            applyToPanel(d)
+                            if (d.panel) applyToPanel(d.panel)
+                        }
+                    }
+                }
+                if (obj.children) {
+                    for (var j = 0; j < obj.children.length; j++) {
+                        var c = obj.children[j]
+                        if (c) {
+                            applyToPanel(c)
+                            if (c.panel) applyToPanel(c.panel)
                         }
                     }
                 }
             }
 
-            // Invisible anchor for strictly center-of-screen popup panels
-            Item {
-                id: screenCenterAnchor
-                anchors.centerIn: parent
-                width: root.slotSize
-                height: root.slotSize
-                visible: false
-            }
-        }
-    }
+            scan(item)
 
-    function configureHostedWidget(item, widgetId) {
-        if (!item) return
-        if (root.loadedWidgetItems.indexOf(item) === -1) root.loadedWidgetItems.push(item)
-        if ("bar" in item) item.bar = dockBarContext
-        if ("moduleName" in item) item.moduleName = widgetId
-
-        function applyToPanel(p) {
-            if (!p) return
-            if ("centerOnBar" in p) {
-                p.centerOnBar = true
-            }
-            if ("bar" in p) {
-                p.bar = dockBarContext
-            }
-            if ("anchorItem" in p) {
-                p.anchorItem = screenCenterAnchor
-            }
-            if ("opened" in p && p.openedChanged) {
-                p.openedChanged.connect(function() {
-                    root.evaluateHoverState()
-                })
-            }
-            if ("open" in p && p.openChanged) {
-                p.openChanged.connect(function() {
-                    root.evaluateHoverState()
-                })
+            if (item.panelLoader) {
+                var handlePanelLoader = function() {
+                    if (item.panelLoader && item.panelLoader.item) {
+                        scan(item.panelLoader.item)
+                    }
+                }
+                handlePanelLoader()
+                item.panelLoader.loaded.connect(handlePanelLoader)
             }
         }
 
-        function scan(obj) {
-            if (!obj) return
-            applyToPanel(obj)
-            if (obj.panel) {
-                applyToPanel(obj.panel)
+        // Proxy Bar context for hosted widgets (places popup strictly in screen center horizontally/vertically, with Style.gapsOut)
+        QtObject {
+            id: dockBarContext
+            property bool vertical: root.isVertical
+            property int barSize: root.slotSize + 8
+            property int barH: root.slotSize + 8
+            property int barW: root.slotSize + 8
+            property string position: root.dockScreenPosition
+            property var screen: (root.dockWindow && root.dockWindow.screen) ? root.dockWindow.screen : null
+            property var shell: root.shell
+            property color foreground: Color.composed("bar.text", "bar.text-alpha", Color.text, 0.9)
+            property color barForeground: Color.composed("bar.text", "bar.text-alpha", Color.text, 0.9)
+            property color urgent: Color.urgent
+            property color muted: Color.muted
+            property color accent: Color.accent
+            property bool foregroundAnimationEnabled: true
+            property string fontFamily: Style.font.family
+            property var activePopout: null
+            function showTooltip(item, text) {}
+            function hideTooltip(item) {}
+            function requestPopout(key) { activePopout = key }
+            function releasePopout(key) { if (activePopout === key) activePopout = null }
+            function isBarWidgetOpen(id) { return false }
+            function switchPanelFrom(panel, dir) { return false }
+            function run(cmd) { Util.execDetached(cmd) }
+        }
+
+        // 2. The Isolated Action Card Popup Overlay Window (Folder Icon Picker)
+        FolderMenu {
+            id: menuWindow
+            root: view
+            dockWindow: dockWindow
+            stackWindow: stackWindow
+        }
+
+        // 3. macOS Stacks Folder Grid Overlay Window (Folder Contents Popup)
+        FolderPopup {
+            id: stackWindow
+            root: view
+            dockWindow: dockWindow
+        }
+
+        // 4. Widget Picker Popup Menu
+        WidgetPickerPopup {
+            id: widgetPicker
+            root: view
+            dockWindow: dockWindow
+            shell: root.shell
+        }
+
+        // 5. Autohide Edge Trigger — thin invisible strip at screen edge, activates dock reveal
+        //    Width/height = autohideEdgeDepth px (1–64). Active only when dock is hidden (shouldSlideOut).
+        PanelWindow {
+            id: edgeTriggerWindow
+            screen: view.dockScreen
+            visible: root.opened && root.pluginEnabled && root.dockEnabled && view.monitorEnabled
+                     && root.isPinnedLoaded
+                     && root.autohide && view.shouldSlideOut
+
+            WlrLayershell.namespace: "omarchy-dock-edge"
+            WlrLayershell.layer: WlrLayer.Top
+            WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+            exclusionMode: ExclusionMode.Ignore
+            color: "transparent"
+
+            // Anchor to the same edge as the dock, no margins — hug the screen edge
+            anchors {
+                top:    root.dockScreenPosition === "top"
+                bottom: root.dockScreenPosition === "bottom"
+                left:   root.dockScreenPosition === "left"
+                right:  root.dockScreenPosition === "right"
             }
-            if (obj.data) {
-                for (var i = 0; i < obj.data.length; i++) {
-                    var d = obj.data[i]
-                    if (d) {
-                        applyToPanel(d)
-                        if (d.panel) applyToPanel(d.panel)
+
+            margins {
+                top: 0
+                bottom: 0
+                left: 0
+                right: 0
+            }
+
+            implicitWidth:  root.isVertical ? root.autohideEdgeDepth : Math.max(root.slotSize + 8, view.totalDockDimension + 14)
+            implicitHeight: root.isVertical ? Math.max(root.slotSize + 8, view.totalDockDimension + 14) : root.autohideEdgeDepth
+
+            HoverHandler {
+                id: edgeTriggerHover
+                onHoveredChanged: {
+                    if (hovered) {
+                        // Cursor reached the screen edge — show the dock
+                        view.isDockHovered = true
+                        autohideLeaveTimer.stop()
                     }
                 }
             }
-            if (obj.children) {
-                for (var j = 0; j < obj.children.length; j++) {
-                    var c = obj.children[j]
-                    if (c) {
-                        applyToPanel(c)
-                        if (c.panel) applyToPanel(c.panel)
-                    }
-                }
-            }
-        }
-
-        scan(item)
-
-        if (item.panelLoader) {
-            var handlePanelLoader = function() {
-                if (item.panelLoader && item.panelLoader.item) {
-                    scan(item.panelLoader.item)
-                }
-            }
-            handlePanelLoader()
-            item.panelLoader.loaded.connect(handlePanelLoader)
         }
     }
 
-    // Proxy Bar context for hosted widgets (places popup strictly in screen center horizontally/vertically, with Style.gapsOut)
-    QtObject {
-        id: dockBarContext
-        property bool vertical: root.isVertical
-        property int barSize: root.slotSize + 8
-        property int barH: root.slotSize + 8
-        property int barW: root.slotSize + 8
-        property string position: root.dockScreenPosition
-        property var screen: (root.dockWindow && root.dockWindow.screen) ? root.dockWindow.screen : null
-        property var shell: root.shell
-        property color foreground: Color.composed("bar.text", "bar.text-alpha", Color.text, 0.9)
-        property color barForeground: Color.composed("bar.text", "bar.text-alpha", Color.text, 0.9)
-        property color urgent: Color.urgent
-        property color muted: Color.muted
-        property color accent: Color.accent
-        property bool foregroundAnimationEnabled: true
-        property string fontFamily: Style.font.family
-        property var activePopout: null
-        function showTooltip(item, text) {}
-        function hideTooltip(item) {}
-        function requestPopout(key) { activePopout = key }
-        function releasePopout(key) { if (activePopout === key) activePopout = null }
-        function isBarWidgetOpen(id) { return false }
-        function switchPanelFrom(panel, dir) { return false }
-        function run(cmd) { Util.execDetached(cmd) }
-    }
+    // One surface per connected screen. New monitors get a dock by default;
+    // disabledMonitors subtracts the ones the user turned off.
+    Variants {
+        model: Quickshell.screens
 
-    // 2. The Isolated Action Card Popup Overlay Window (Folder Icon Picker)
-    FolderMenu {
-        id: menuWindow
-        root: root
-        dockWindow: dockWindow
-        stackWindow: stackWindow
-    }
+        delegate: Component {
+            DockScreenView {
+                required property var modelData
 
-    // 3. macOS Stacks Folder Grid Overlay Window (Folder Contents Popup)
-    FolderPopup {
-        id: stackWindow
-        root: root
-        dockWindow: dockWindow
-    }
-
-    // 4. Widget Picker Popup Menu
-    WidgetPickerPopup {
-        id: widgetPicker
-        root: root
-        dockWindow: dockWindow
-        shell: root.shell
-    }
-
-    // 5. Autohide Edge Trigger — thin invisible strip at screen edge, activates dock reveal
-    //    Width/height = autohideEdgeDepth px (1–64). Active only when dock is hidden (shouldSlideOut).
-    PanelWindow {
-        id: edgeTriggerWindow
-        visible: root.opened && root.pluginEnabled && root.dockEnabled && root.isPinnedLoaded
-                 && root.autohide && root.shouldSlideOut
-
-        WlrLayershell.namespace: "omarchy-dock-edge"
-        WlrLayershell.layer: WlrLayer.Top
-        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
-        exclusionMode: ExclusionMode.Ignore
-        color: "transparent"
-
-        // Anchor to the same edge as the dock, no margins — hug the screen edge
-        anchors {
-            top:    root.dockScreenPosition === "top"
-            bottom: root.dockScreenPosition === "bottom"
-            left:   root.dockScreenPosition === "left"
-            right:  root.dockScreenPosition === "right"
-        }
-
-        margins {
-            top: 0
-            bottom: 0
-            left: 0
-            right: 0
-        }
-
-        implicitWidth:  root.isVertical ? root.autohideEdgeDepth : Math.max(root.slotSize + 8, root.totalDockDimension + 14)
-        implicitHeight: root.isVertical ? Math.max(root.slotSize + 8, root.totalDockDimension + 14) : root.autohideEdgeDepth
-
-        HoverHandler {
-            id: edgeTriggerHover
-            onHoveredChanged: {
-                if (hovered) {
-                    // Cursor reached the screen edge — show the dock
-                    root.isDockHovered = true
-                    autohideLeaveTimer.stop()
-                }
+                dockScreen: modelData
             }
         }
     }
+
 }

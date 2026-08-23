@@ -13,6 +13,18 @@ BarWidget {
 
   property string settingsPath: Quickshell.env("HOME") + "/.config/omarchy/dock-settings.json"
   property bool dockEnabled: true
+  property var disabledMonitors: []
+  // The dock owns dock-settings.json. This widget must never write a value it
+  // has not read back first, or its defaults land on top of the real file -
+  // which is how workspaceStride silently reverted to 0.
+  property bool settingsLoaded: false
+
+  // The screen this copy of the widget is drawn on. The bar is built per
+  // monitor, so "this monitor" is unambiguous: it is the one you clicked on.
+  readonly property string thisMonitor: root.anchorWindow && root.anchorWindow.screen
+    ? String(root.anchorWindow.screen.name || "") : ""
+  readonly property bool thisMonitorEnabled: root.thisMonitor === ""
+    || root.disabledMonitors.indexOf(root.thisMonitor) === -1
   property bool autohide: false
   property bool showFolderTitles: true
   property bool showBadges: true
@@ -68,6 +80,9 @@ BarWidget {
         if (s && s.dockEnabled !== undefined) {
           root.dockEnabled = (s.dockEnabled === true)
         }
+        if (s && s.disabledMonitors !== undefined && Array.isArray(s.disabledMonitors)) {
+          root.disabledMonitors = s.disabledMonitors
+        }
         if (s && s.autohide !== undefined) {
           root.autohide = (s.autohide === true)
         }
@@ -101,9 +116,11 @@ BarWidget {
         }
       }
     } catch(e) {}
+    root.settingsLoaded = true
   }
 
   function saveSettings() {
+    if (!root.settingsLoaded) return
     var s = {}
     try {
       var txt = settingsFile.text()
@@ -117,7 +134,6 @@ BarWidget {
     s.showFolderTitles = root.showFolderTitles
     s.showBadges = root.showBadges
     s.groupByWorkspace = root.groupByWorkspace
-    s.workspaceStride = root.workspaceStride
     s.widgetsEnabled = root.widgetsEnabled
     s.appMenuPosition = root.appMenuPosition || s.appMenuPosition || "left"
     s.widgetPosition = root.widgetPosition || s.widgetPosition || "right"
@@ -139,6 +155,22 @@ BarWidget {
     root.dockEnabled = val
     if (root.bar && typeof root.bar.run === "function") {
       root.bar.run("omarchy-shell rosakodu.dock setDockEnabled " + (val ? "true" : "false"))
+    } else {
+      saveSettings()
+    }
+  }
+
+  function setThisMonitorEnabled(val) {
+    if (!root.thisMonitor) return
+    var next = []
+    for (var i = 0; i < root.disabledMonitors.length; i++) {
+      if (String(root.disabledMonitors[i]) !== root.thisMonitor) next.push(root.disabledMonitors[i])
+    }
+    if (!val) next.push(root.thisMonitor)
+    root.disabledMonitors = next
+    if (root.bar && typeof root.bar.run === "function") {
+      root.bar.run("omarchy-shell rosakodu.dock setMonitorEnabled "
+        + root.thisMonitor + ":" + (val ? "true" : "false"))
     } else {
       saveSettings()
     }
@@ -497,6 +529,87 @@ BarWidget {
             cursorShape: Qt.PointingHandCursor
             onClicked: {
               root.setAutohide(!root.autohide)
+            }
+          }
+        }
+
+        // Per-monitor Row. "Enable dock" above is the master switch; this
+        // subtracts the screen you are looking at from it, so a second display
+        // can stay clear without turning the dock off everywhere.
+        Rectangle {
+          id: thisMonitorRow
+          Layout.fillWidth: true
+          height: 48
+          radius: 8
+          visible: root.thisMonitor !== ""
+          opacity: root.dockEnabled ? 1.0 : 0.4
+          enabled: root.dockEnabled
+          color: monitorMouse.containsMouse ? Style.hoverFillFor(Color.popups.text, Color.accent) : "transparent"
+          Behavior on color { ColorAnimation { duration: 120 } }
+          Behavior on opacity { NumberAnimation { duration: 150 } }
+
+          RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 10
+            anchors.rightMargin: 10
+            spacing: 8
+
+            ColumnLayout {
+              Layout.fillWidth: true
+              Layout.alignment: Qt.AlignVCenter
+              spacing: 2
+
+              Text {
+                text: "Dock on " + root.thisMonitor
+                font.family: Style.font.family
+                font.pixelSize: 12
+                font.bold: true
+                color: Color.popups.text
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+              }
+
+              Text {
+                text: "Show the dock on this monitor"
+                font.family: Style.font.family
+                font.pixelSize: 10
+                color: Color.muted
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+              }
+            }
+
+            Rectangle {
+              id: switchMonitorTrack
+              Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
+              Layout.preferredWidth: 36
+              Layout.preferredHeight: 20
+              width: 36
+              height: 20
+              radius: 10
+              color: root.thisMonitorEnabled ? Color.accent : Qt.rgba(Color.popups.text.r, Color.popups.text.g, Color.popups.text.b, 0.25)
+              Behavior on color { ColorAnimation { duration: 180 } }
+
+              Rectangle {
+                id: switchMonitorThumb
+                width: 14
+                height: 14
+                radius: 7
+                anchors.verticalCenter: parent.verticalCenter
+                x: root.thisMonitorEnabled ? (switchMonitorTrack.width - width - 3) : 3
+                color: root.thisMonitorEnabled ? Color.background : Color.popups.text
+                Behavior on x { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+              }
+            }
+          }
+
+          MouseArea {
+            id: monitorMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              root.setThisMonitorEnabled(!root.thisMonitorEnabled)
             }
           }
         }
