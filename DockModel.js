@@ -596,6 +596,23 @@ function getCandidates(rawIcon, icon, appId) {
     var lastPart = clean.split(".").pop();
     add(lastPart);
 
+    // Reverse-DNS ids name their vendor in the middle, and that is often the
+    // only icon actually installed: org.omarchy.agent ships omarchy.png and
+    // nothing called "agent". Try the shorter dotted prefixes, then each
+    // meaningful segment, after the specific forms above have missed.
+    var idParts = clean.split(".");
+    if (idParts.length > 1) {
+        for (var pfx = idParts.length - 1; pfx >= 2; pfx--) {
+            add(idParts.slice(0, pfx).join("."));
+        }
+        for (var seg = idParts.length - 1; seg >= 0; seg--) {
+            var part = idParts[seg];
+            if (part.length < 3) continue;
+            if (part === "org" || part === "com" || part === "net" || part === "io" || part === "dev") continue;
+            add(part);
+        }
+    }
+
     if (FALLBACK_ICON_CANDIDATES[clean]) {
         var fb = FALLBACK_ICON_CANDIDATES[clean];
         for (var i = 0; i < fb.length; i++) add(fb[i]);
