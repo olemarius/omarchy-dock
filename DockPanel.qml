@@ -114,6 +114,14 @@ Item {
         function setGroupByWorkspace(val: string): string { root.setGroupByWorkspace(val === "true" || val === "1"); return "ok" }
         function setShowEmptyWorkspaces(val: string): string { root.showEmptyWorkspaces = (val === "true" || val === "1"); root.saveSettings(); root.updateDockItems(); return "ok" }
         function setWorkspaceScope(val: string): string { root.workspaceScope = (val === "monitor") ? "monitor" : "all"; root.saveSettings(); root.updateDockItems(); return "ok" }
+        // Comma-separated monitor names, or an empty string to clear.
+        function setExcludeMonitors(val: string): string { root.setExcludeMonitors(String(val || "")); return "ok" }
+        function listMonitors(): string {
+            var out = []
+            var mons = (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values : []
+            for (var i = 0; i < mons.length; i++) out.push(String(mons[i].name))
+            return out.join(",")
+        }
         function ping(): string { return "ok" }
     }
 
@@ -332,6 +340,9 @@ Item {
     // "all" shows every workspace; "monitor" restricts the rail to workspaces
     // that currently live on the monitor the dock is displayed on.
     property string workspaceScope: "all"
+    // Monitor names (as Hyprland reports them, e.g. "eDP-1") whose workspaces
+    // are left off the rail entirely.
+    property var excludeMonitors: []
     readonly property bool showAppMenu: root.widgetsEnabled && root.dockWidgets && (root.dockWidgets.indexOf("omarchy.apps") !== -1)
     property string appMenuPosition: "left"
     property bool widgetsEnabled: true
@@ -626,6 +637,9 @@ Item {
                 if (s.workspaceScope !== undefined) {
                     root.workspaceScope = (s.workspaceScope === "monitor") ? "monitor" : "all"
                 }
+                if (s.excludeMonitors !== undefined && Array.isArray(s.excludeMonitors)) {
+                    root.excludeMonitors = s.excludeMonitors
+                }
                 if (s.appMenuPosition !== undefined) {
                     root.appMenuPosition = s.appMenuPosition
                 }
@@ -664,6 +678,7 @@ Item {
             showEmptyWorkspaces: root.showEmptyWorkspaces,
             paddedWorkspaceCount: root.paddedWorkspaceCount,
             workspaceScope: root.workspaceScope || "all",
+            excludeMonitors: root.excludeMonitors || [],
             widgetsEnabled: root.widgetsEnabled,
             appMenuPosition: root.appMenuPosition || "left",
             widgetPosition: root.widgetPosition || "right",
@@ -946,6 +961,7 @@ Item {
                 showEmpty: root.showEmptyWorkspaces,
                 padTo: root.paddedWorkspaceCount,
                 monitorName: (root.workspaceScope === "monitor") ? root.dockMonitorName : "",
+                excludeMonitors: root.excludeMonitors,
                 maxItemsPerGroup: 0
             })
     }
@@ -1052,6 +1068,19 @@ Item {
 
     onShowEmptyWorkspacesChanged: root.updateDockItems()
     onWorkspaceScopeChanged: root.updateDockItems()
+    onExcludeMonitorsChanged: root.updateDockItems()
+
+    function setExcludeMonitors(raw) {
+        var parts = String(raw || "").split(",")
+        var next = []
+        for (var i = 0; i < parts.length; i++) {
+            var name = parts[i].trim()
+            if (name.length > 0 && next.indexOf(name) === -1) next.push(name)
+        }
+        root.excludeMonitors = next
+        root.saveSettings()
+        root.updateDockItems()
+    }
 
     function setGroupByWorkspace(val) {
         root.groupByWorkspace = (val === true)

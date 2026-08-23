@@ -75,7 +75,8 @@ You can customize options directly via the `···` status bar widget or in `~/.
   "groupByWorkspace": false,
   "showEmptyWorkspaces": true,
   "paddedWorkspaceCount": 5,
-  "workspaceScope": "all"
+  "workspaceScope": "all",
+  "excludeMonitors": []
 }
 ```
 
@@ -87,6 +88,7 @@ You can customize options directly via the `···` status bar widget or in `~/.
 | `showEmptyWorkspaces` | `true` | Keep plates for workspaces with no windows, so the rail does not reflow as workspaces empty out. |
 | `paddedWorkspaceCount` | `5` | How many numbered workspaces are always shown when `showEmptyWorkspaces` is on. |
 | `workspaceScope` | `"all"` | `"all"` shows every workspace; `"monitor"` restricts the rail to workspaces on the dock's own monitor. |
+| `excludeMonitors` | `[]` | Monitor names whose workspaces are left off the rail entirely, e.g. `["eDP-1"]` to ignore the laptop screen while docked. Excluded workspaces are not padded back as empty plates. Workspaces the compositor has never opened have no monitor yet, so they still appear — set `showEmptyWorkspaces` to `false` for a rail of only what exists. |
 
 Pinning, folders, reordering and edit mode apply to the flat rail. The grouped rail is a live view of what the compositor reports, so its tiles are not reorderable: left click focuses, the mouse wheel cycles that application's windows on that workspace, middle click spawns another instance, and dragging moves windows between workspaces rather than rearranging the rail.
 
@@ -96,6 +98,8 @@ The same options are reachable over IPC:
 omarchy-shell rosakodu.dock setGroupByWorkspace true
 omarchy-shell rosakodu.dock setShowEmptyWorkspaces false
 omarchy-shell rosakodu.dock setWorkspaceScope monitor
+omarchy-shell rosakodu.dock listMonitors                  # names to exclude
+omarchy-shell rosakodu.dock setExcludeMonitors eDP-1      # comma-separated; "" clears
 ```
 
 Pinned items and folder layouts are automatically saved to `~/.config/omarchy/dock-pinned.json`.

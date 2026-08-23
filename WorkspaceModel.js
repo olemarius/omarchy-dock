@@ -164,28 +164,53 @@ function buildAppItem(appId, entry, windows, addresses, activeToplevel, appLibra
     };
 }
 
+function isExcludedMonitor(excluded, monitorName) {
+    if (!excluded || excluded.length === 0) return false;
+    var name = String(monitorName || "");
+    if (!name) return false;
+    for (var i = 0; i < excluded.length; i++) {
+        if (String(excluded[i] || "") === name) return true;
+    }
+    return false;
+}
+
 // Which workspaces get a plate, in rail order. Existing workspaces always
 // appear; `showEmpty` pads the numbered range so the rail keeps a stable width
 // instead of reflowing every time the last window of a workspace closes.
+//
+// Two independent filters can narrow that set: `monitorName` restricts the
+// rail to one monitor, and `excludeMonitors` drops the workspaces of monitors
+// the user does not want represented at all.
 function workspaceIdsToRender(workspaces, options) {
     var opts = options || {};
     var showEmpty = opts.showEmpty !== false;
     var padTo = Number(opts.padTo);
     if (!isFinite(padTo) || padTo < 0) padTo = 5;
     var monitorName = String(opts.monitorName || "");
+    var excluded = toArray(opts.excludeMonitors);
 
     var list = toArray(workspaces);
     var ids = [];
     var byId = {};
+    // Ids that exist but were filtered out. Padding must not resurrect them as
+    // empty plates, or excluding a monitor would only hide its windows and
+    // leave its workspace numbers sitting on the rail.
+    var suppressed = {};
 
     for (var i = 0; i < list.length; i++) {
         var ws = list[i];
         if (!ws) continue;
         var id = Number(safeGet(ws, "id", -1));
         if (!isNormalWorkspaceId(id)) continue;
-        if (monitorName) {
-            var mon = safeGet(ws, "monitor", null);
-            if (!mon || String(safeGet(mon, "name", "")) !== monitorName) continue;
+        var mon = safeGet(ws, "monitor", null);
+        var monName = mon ? String(safeGet(mon, "name", "")) : "";
+        if (isExcludedMonitor(excluded, monName)) {
+            suppressed[id] = true;
+            continue;
+        }
+        if (monitorName && monName !== monitorName) {
+            suppressed[id] = true;
+            continue;
         }
         if (byId[id]) continue;
         byId[id] = ws;
@@ -197,7 +222,7 @@ function workspaceIdsToRender(workspaces, options) {
     // pads too, since an unopened workspace has no monitor to be filtered by.
     if (showEmpty) {
         for (var p = 1; p <= padTo; p++) {
-            if (!byId[p]) {
+            if (!byId[p] && !suppressed[p]) {
                 byId[p] = null;
                 ids.push(p);
             }
