@@ -324,6 +324,26 @@ function expectedRealIdsFor(plateId, stride, screenCount) {
     return out;
 }
 
+// True when a live window cannot be placed yet.
+//
+// Moving a window to a workspace Hyprland has not tracked leaves its toplevel
+// pointing at a placeholder whose id is -1. Building from that silently drops
+// the window - it vanishes from the rail while sitting perfectly happily on
+// its new workspace. Callers use this to wait for the data instead of
+// publishing a rail with a window missing.
+function hasUnplaceableWindows(hyprToplevels, knownWindows) {
+    var index = buildWindowWorkspaceIndex(hyprToplevels);
+    var windows = toArray(knownWindows);
+    for (var i = 0; i < windows.length; i++) {
+        var win = windows[i];
+        if (!win) continue;
+        var pos = index.wayland.indexOf(win);
+        if (pos === -1) continue;
+        if (!isNormalWorkspaceId(index.workspaceId[pos])) return true;
+    }
+    return false;
+}
+
 // Main entry point.
 //
 // hyprToplevels  Hyprland.toplevels.values  (carries the workspace link)

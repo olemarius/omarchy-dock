@@ -1798,6 +1798,25 @@ Item {
             // losing its contents at random. Keep the last good answer instead.
             if (hyprTops.length === 0 && root.knownWindows.length > 0) return
 
+            // Same idea, one window at a time: a window just moved to a
+            // workspace Hyprland has not tracked yet still points at a
+            // placeholder, and building from that drops it from the rail
+            // entirely - it looks like the window was lost, when it is simply
+            // not described yet. Ask for the data and rebuild when it lands.
+            if (WorkspaceModel.hasUnplaceableWindows(hyprTops, root.knownWindows)) {
+                if (view.resettleAttempts < 5) {
+                    view.resettleAttempts++
+                    try {
+                        Hyprland.refreshWorkspaces()
+                        Hyprland.refreshToplevels()
+                    } catch (e) {}
+                    resettleTimer.restart()
+                    return
+                }
+                // Data never arrived; better an imperfect rail than a frozen one.
+            }
+            view.resettleAttempts = 0
+
             view.workspaceGroups = WorkspaceModel.buildWorkspaceGroups(
                 hyprTops,
                 wsList,
@@ -1853,6 +1872,16 @@ Item {
         function setWidgetPosition(pos) { return root.setWidgetPosition(pos) }
 
         onMonitorEnabledChanged: if (!view.monitorEnabled) view.resetInteraction()
+
+        // Retry budget for windows the compositor has not described yet.
+        property int resettleAttempts: 0
+
+        Timer {
+            id: resettleTimer
+            interval: 120
+            repeat: false
+            onTriggered: view.rebuildWorkspaceGroups()
+        }
 
         Component.onCompleted: root.registerView(view)
         Component.onDestruction: root.unregisterView(view)
