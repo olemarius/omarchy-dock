@@ -54,19 +54,29 @@ Item {
         return monitor ? String(monitor.name || "") : ""
     }
 
-    // The surface a per-dock action applies to: the focused screen's, falling
-    // back to the only dock when there is one, and to the first otherwise.
+    // The surface a per-dock action applies to: the focused screen's, then any
+    // screen that actually has a dock.
+    //
+    // Views exist for screens the dock is switched off on, and handing an
+    // action to one of those sends it somewhere with nothing on screen - the
+    // action appears to do nothing at all. Enabled views are the only
+    // candidates.
     function focusedView() {
         var views = root.dockViews
-        if (views.length === 0) return null
+        var enabled = []
+        for (var i = 0; i < views.length; i++) {
+            if (views[i] && views[i].monitorEnabled) enabled.push(views[i])
+        }
+        if (enabled.length === 0) return null
+
         var focused = root.focusedScreenName()
         if (focused) {
-            for (var i = 0; i < views.length; i++) {
-                var candidate = views[i]
-                if (candidate && candidate.dockScreen && String(candidate.dockScreen.name || "") === focused) return candidate
+            for (var j = 0; j < enabled.length; j++) {
+                var candidate = enabled[j]
+                if (candidate.dockScreen && String(candidate.dockScreen.name || "") === focused) return candidate
             }
         }
-        return views[0]
+        return enabled[0]
     }
 
     // Dock state & Multi-source Live Bar Position Tracking
@@ -170,6 +180,12 @@ Item {
         function setWorkspaceScope(val: string): string { root.workspaceScope = (val === "monitor") ? "monitor" : "all"; root.saveSettings(); root.updateDockItems(); return "ok" }
         // Comma-separated monitor names, or an empty string to clear.
         function setExcludeMonitors(val: string): string { root.setExcludeMonitors(String(val || "")); return "ok" }
+        function setGroupAppInstances(val: string): string {
+            root.groupAppInstances = (val === "true" || val === "1")
+            root.saveSettings()
+            root.updateDockItems()
+            return "ok"
+        }
         function setWorkspaceStride(val: string): string {
             var stride = parseInt(val, 10)
             if (isNaN(stride) || stride < 0 || stride > 100) return "invalid"
@@ -369,6 +385,9 @@ Item {
     // "there is somewhere free to go", so one is shown by default and the rest
     // are dropped. -1 shows every empty workspace.
     property int maxEmptyWorkspaces: 1
+
+    // Empty plates the rail keeps at rest. -1 keeps them all; 0 keeps none.
+    readonly property int emptyPlateAllowance: root.showEmptyWorkspaces ? root.maxEmptyWorkspaces : 0
     property int paddedWorkspaceCount: 5
     // "all" shows every workspace; "monitor" restricts the rail to workspaces
     // that currently live on the monitor the dock is displayed on.
@@ -392,6 +411,9 @@ Item {
     // offset (usually 10) and each plate represents the pair; 0 keeps one
     // plate per workspace.
     property int workspaceStride: 0
+    // One tile per application, or one per window. Off gives two windows of the
+    // same editor two separate icons instead of one icon carrying a count.
+    property bool groupAppInstances: true
     readonly property bool showAppMenu: root.widgetsEnabled && root.dockWidgets && (root.dockWidgets.indexOf("omarchy.apps") !== -1)
     property string appMenuPosition: "left"
     property bool widgetsEnabled: true
@@ -626,6 +648,9 @@ Item {
                 if (s.excludeUndockedMonitors !== undefined) {
                     root.excludeUndockedMonitors = (s.excludeUndockedMonitors === true)
                 }
+                if (s.groupAppInstances !== undefined) {
+                    root.groupAppInstances = (s.groupAppInstances === true)
+                }
                 if (s.workspaceStride !== undefined) {
                     var stride = parseInt(s.workspaceStride, 10)
                     if (!isNaN(stride) && stride >= 0 && stride <= 100) root.workspaceStride = stride
@@ -673,6 +698,7 @@ Item {
             disabledMonitors: root.disabledMonitors || [],
             excludeUndockedMonitors: root.excludeUndockedMonitors,
             workspaceStride: root.workspaceStride,
+            groupAppInstances: root.groupAppInstances,
             widgetsEnabled: root.widgetsEnabled,
             appMenuPosition: root.appMenuPosition || "left",
             widgetPosition: root.widgetPosition || "right",
@@ -1024,6 +1050,7 @@ Item {
     onWorkspaceScopeChanged: root.updateDockItems()
     onExcludeMonitorsChanged: root.updateDockItems()
     onWorkspaceStrideChanged: root.updateDockItems()
+    onGroupAppInstancesChanged: root.updateDockItems()
     onMaxEmptyWorkspacesChanged: root.updateDockItems()
 
     // Turn the dock on or off for one screen. Named rather than indexed so the
@@ -1575,6 +1602,28 @@ Item {
 
         // This screen's own item cap. The shared model is built to the widest
         // screen's capacity, so a narrower dock takes the prefix that fits it.
+        // True from the moment a tile starts travelling until it is dropped.
+        // While it is set the rail reveals its empty plates, so there is
+        // somewhere to drop a window that no workspace holds yet.
+        //
+        // This is a visibility change, never a model rebuild: rebuilding would
+        // recreate the delegates and destroy the very tile being dragged.
+        property bool isWorkspaceDragging: false
+
+        // Highest plate that currently holds something. The reveal runs one
+        // past it, which is the "somewhere new" slot.
+        readonly property int lastOccupiedPlate: {
+            var last = 0
+            for (var i = 0; i < view.workspaceGroups.length; i++) {
+                var group = view.workspaceGroups[i]
+                if (group && group.items && group.items.length > 0) {
+                    var id = Number(group.workspaceId)
+                    if (id > last) last = id
+                }
+            }
+            return last
+        }
+
         readonly property int maxDockItems: root.itemCapacityFor(view.logicalScreenWidth, view.logicalScreenHeight)
         readonly property var visibleDockItems: root.dockItems.slice(0, view.maxDockItems)
 
@@ -1591,6 +1640,7 @@ Item {
             view.folderDragActiveIndex = -1
             view.folderDragTargetIndex = -1
             view.workspaceDropTargetId = -1
+            view.isWorkspaceDragging = false
         }
 
         // Keep an open folder or window menu pointed at live model data, or
@@ -1686,12 +1736,11 @@ Item {
                 notifTracker.canonicalCounts,
                 notifTracker.canonicalUrgent,
                 {
-                    showEmpty: root.showEmptyWorkspaces,
-                    maxEmptyPlates: root.maxEmptyWorkspaces,
                     padTo: root.paddedWorkspaceCount,
                     monitorName: (root.workspaceScope === "monitor") ? view.dockMonitorName : "",
                     excludeMonitors: root.effectiveExcludedMonitors,
                     stride: root.workspaceStride,
+                    groupInstances: root.groupAppInstances,
                     screenCount: (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values.length : 1,
                     maxItemsPerGroup: 0
                 })
@@ -2372,6 +2421,23 @@ Item {
                                 required property var modelData
 
                                 groupData: modelData
+
+                                // Occupied plates always show. Empty ones show
+                                // while a tile is travelling - the gaps between
+                                // and one past the last, so a window can be
+                                // dropped on a workspace nothing lives on yet -
+                                // and otherwise only up to the resting
+                                // allowance. The workspace being looked at is
+                                // never hidden, however empty.
+                                visible: !modelData.isEmpty
+                                    || modelData.isActive || modelData.isFocused
+                                    || (view.isWorkspaceDragging
+                                        && Number(modelData.workspaceId) <= view.lastOccupiedPlate + 1)
+                                    || (!view.isWorkspaceDragging && root.emptyPlateAllowance < 0)
+                                    || (!view.isWorkspaceDragging && root.emptyPlateAllowance > 0
+                                        && modelData.emptyIndex >= 0
+                                        && modelData.emptyIndex < root.emptyPlateAllowance)
+
                                 barPosition: root.barPosition
                                 shell: root.shell
                                 slotSize: root.slotSize
@@ -2387,12 +2453,17 @@ Item {
                                 onWorkspaceActivated: function(group) { root.activateWorkspace(group) }
                                 onItemLaunched: function(appId) { root.requestFocusOnLaunch(appId) }
                                 onItemDragMoved: function(itemData, sourceWorkspaceId, sceneX, sceneY) {
+                                    view.isWorkspaceDragging = true
                                     view.updateWorkspaceDropTarget(sceneX, sceneY)
                                 }
                                 onItemDragDropped: function(itemData, sourceWorkspaceId, sceneX, sceneY) {
                                     view.finishWorkspaceDrag(itemData, sourceWorkspaceId, sceneX, sceneY)
+                                    view.isWorkspaceDragging = false
                                 }
-                                onItemDragCanceled: view.workspaceDropTargetId = -1
+                                onItemDragCanceled: {
+                                    view.workspaceDropTargetId = -1
+                                    view.isWorkspaceDragging = false
+                                }
                             }
                         }
                     }

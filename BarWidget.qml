@@ -32,6 +32,7 @@ BarWidget {
   // 0 = one plate per workspace, >0 = plates span paired workspaces across
   // monitors (the offset between a screen's workspaces, conventionally 10).
   property int workspaceStride: 0
+  property bool groupAppInstances: true
   readonly property int spanningStride: 10
   property bool widgetsEnabled: true
   property bool settingsOpen: false
@@ -94,6 +95,9 @@ BarWidget {
         }
         if (s && s.groupByWorkspace !== undefined) {
           root.groupByWorkspace = (s.groupByWorkspace === true)
+        }
+        if (s && s.groupAppInstances !== undefined) {
+          root.groupAppInstances = (s.groupAppInstances === true)
         }
         if (s && s.workspaceStride !== undefined) {
           var stride = parseInt(s.workspaceStride, 10)
@@ -189,6 +193,15 @@ BarWidget {
     root.groupByWorkspace = val
     if (root.bar && typeof root.bar.run === "function") {
       root.bar.run("omarchy-shell rosakodu.dock setGroupByWorkspace " + (val ? "true" : "false"))
+    } else {
+      saveSettings()
+    }
+  }
+
+  function setGroupAppInstances(val) {
+    root.groupAppInstances = val
+    if (root.bar && typeof root.bar.run === "function") {
+      root.bar.run("omarchy-shell rosakodu.dock setGroupAppInstances " + (val ? "true" : "false"))
     } else {
       saveSettings()
     }
@@ -688,6 +701,84 @@ BarWidget {
             cursorShape: Qt.PointingHandCursor
             onClicked: {
               root.setGroupByWorkspace(!root.groupByWorkspace)
+            }
+          }
+        }
+
+        // Instance Grouping Row
+        Rectangle {
+          id: instanceRow
+          Layout.fillWidth: true
+          height: 48
+          radius: 8
+          opacity: (root.dockEnabled && root.groupByWorkspace) ? 1.0 : 0.4
+          enabled: root.dockEnabled && root.groupByWorkspace
+          color: instanceMouse.containsMouse ? Style.hoverFillFor(Color.popups.text, Color.accent) : "transparent"
+          Behavior on color { ColorAnimation { duration: 120 } }
+          Behavior on opacity { NumberAnimation { duration: 150 } }
+
+          RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 10
+            anchors.rightMargin: 10
+            spacing: 8
+
+            ColumnLayout {
+              Layout.fillWidth: true
+              Layout.alignment: Qt.AlignVCenter
+              spacing: 2
+
+              Text {
+                text: "Group windows"
+                font.family: Style.font.family
+                font.pixelSize: 12
+                font.bold: true
+                color: Color.popups.text
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+              }
+
+              Text {
+                text: "One icon per app, not per window"
+                font.family: Style.font.family
+                font.pixelSize: 10
+                color: Color.muted
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+              }
+            }
+
+            Rectangle {
+              id: switchInstanceTrack
+              Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
+              Layout.preferredWidth: 36
+              Layout.preferredHeight: 20
+              width: 36
+              height: 20
+              radius: 10
+              color: root.groupAppInstances ? Color.accent : Qt.rgba(Color.popups.text.r, Color.popups.text.g, Color.popups.text.b, 0.25)
+              Behavior on color { ColorAnimation { duration: 180 } }
+
+              Rectangle {
+                id: switchInstanceThumb
+                width: 14
+                height: 14
+                radius: 7
+                anchors.verticalCenter: parent.verticalCenter
+                x: root.groupAppInstances ? (switchInstanceTrack.width - width - 3) : 3
+                color: root.groupAppInstances ? Color.background : Color.popups.text
+                Behavior on x { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+              }
+            }
+          }
+
+          MouseArea {
+            id: instanceMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              root.setGroupAppInstances(!root.groupAppInstances)
             }
           }
         }

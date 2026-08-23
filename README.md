@@ -37,7 +37,7 @@ A modern, highly polished, and fully native application dock plugin for **Omarch
 | **Cycle Duplicates** | `Mouse Wheel` / `←` `→` Arrow Keys | Cycles through duplicate windows via 3-slot sliding viewport (original dash `━` and duplicate dots `•`). |
 | **Open Widget Panel** | `Left-Click` *(on Widget)* | Opens the hosted system widget panel (Audio, Wi-Fi, BT, Power, Monitor, etc.) centered on screen. |
 | **Switch Workspace** | `Left-Click` *(on plate background)* | In workspace grouping mode, clicking a workspace plate anywhere outside an icon switches to that workspace. |
-| **Move Window to Workspace** | `Drag` *(tile onto another plate)* | In workspace grouping mode, drag an application tile onto another workspace's plate. Every window that tile represents moves there; you stay on your current workspace. Dropping on the tile's own plate, or outside the rail, does nothing. |
+| **Move Window to Workspace** | `Drag` *(tile onto another plate)* | In workspace grouping mode, drag an application tile onto another workspace's plate. Every window that tile represents moves there; you stay on your current workspace. Empty workspaces appear as drop targets for the duration of the drag — the gaps between occupied ones and one past the last — so a window can be sent somewhere new. Dropping on the tile's own plate, or outside the rail, does nothing. |
 | **Enter Edit Mode** | `Long-Press` *(450ms)* | Activates iOS-style physical wobble mode to reorder apps, toggle pins, remove widgets, or dissolve folders. |
 | **Reorder & Folders** | `Drag & Drop` | Drag along the rail to reorder. Drag one icon onto another to create a folder (App Stack). |
 | **Folder Icon Picker** | `Right-Click` *(on Folder)* | Opens the Nerd Font glyph picker to customize the folder's icon. |
@@ -81,6 +81,7 @@ You can customize options directly via the `···` status bar widget or in `~/.
   "workspaceScope": "all",
   "excludeMonitors": [],
   "maxEmptyWorkspaces": 1,
+  "groupAppInstances": true,
   "workspaceStride": 0
 }
 ```
@@ -101,9 +102,10 @@ omarchy-shell rosakodu.dock setExcludeUndockedMonitors false
 | :--- | :--- | :--- |
 | `groupByWorkspace` | `false` | Group running windows onto one clickable plate per workspace instead of the flat pinned rail. |
 | `showEmptyWorkspaces` | `true` | Keep plates for workspaces with no windows, so the rail does not reflow as workspaces empty out. Set `false` for a rail of only what is running. |
-| `maxEmptyWorkspaces` | `1` | How many empty plates to keep. A trailing run of untouched workspaces says nothing beyond "there is somewhere free to go", so one is shown and the rest dropped; `-1` shows them all. The workspace you are currently viewing always keeps its plate, however empty. |
+| `maxEmptyWorkspaces` | `1` | How many empty plates to keep at rest — while a tile is being dragged the rail reveals its empty workspaces regardless, both the gaps between occupied ones and one past the last, so a window can be dropped onto a workspace nothing lives on yet. A trailing run of untouched workspaces says nothing beyond "there is somewhere free to go", so one is shown and the rest dropped; `-1` shows them all. The workspace you are currently viewing always keeps its plate, however empty. |
 | `paddedWorkspaceCount` | `5` | How many numbered workspaces are always shown when `showEmptyWorkspaces` is on. |
 | `workspaceScope` | `"all"` | `"all"` shows every workspace; `"monitor"` restricts the rail to workspaces on the dock's own monitor. |
+| `groupAppInstances` | `true` | One tile per application. Turn it off to give every window its own icon, so two windows of the same editor are two separate targets rather than one icon carrying a count. |
 | `workspaceStride` | `0` | Spanning workspaces. Hyprland cannot put one workspace on two monitors, so multi-monitor setups often pair them by offset — workspace 2 on the main screen and 12 on the second being two halves of one idea. Set this to that offset (usually `10`) and each plate represents the pair: it shows the windows of both halves, clicking it switches every screen at once, and dragging a tile onto it keeps each window on the screen it is already on. `0` gives one plate per workspace. |
 | `excludeMonitors` | `[]` | Monitor names whose workspaces are left off the rail entirely, e.g. `["eDP-1"]` to ignore the laptop screen while docked. Excluded workspaces are not padded back as empty plates. Workspaces the compositor has never opened have no monitor yet, so they still appear — set `showEmptyWorkspaces` to `false` for a rail of only what exists. |
 

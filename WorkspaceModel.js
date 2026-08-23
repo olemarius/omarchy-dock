@@ -207,7 +207,6 @@ function plateIdFor(workspaceId, stride, plateCount) {
 // workspaces of monitors the user does not want represented at all.
 function platesToRender(workspaces, options) {
     var opts = options || {};
-    var showEmpty = opts.showEmpty !== false;
     var padTo = Number(opts.padTo);
     if (!isFinite(padTo) || padTo < 0) padTo = 5;
     var stride = Number(opts.stride);
@@ -253,12 +252,14 @@ function platesToRender(workspaces, options) {
         members[plate].push(ws);
     }
 
-    if (showEmpty) {
-        for (var p = 1; p <= padTo; p++) {
-            if (!members[p] && !suppressed[p]) {
-                members[p] = [];
-                ids.push(p);
-            }
+    // Always padded. Whether an empty plate is *shown* is a view decision -
+    // the rail hides them by default and reveals them while a tile is being
+    // dragged, and it can only do that without rebuilding the model (which
+    // would destroy the tile mid-drag) if they are already in it.
+    for (var p = 1; p <= padTo; p++) {
+        if (!members[p] && !suppressed[p]) {
+            members[p] = [];
+            ids.push(p);
         }
     }
 
@@ -299,13 +300,15 @@ function buildWorkspaceGroups(hyprToplevels, workspaces, knownWindows, activeTop
     var opts = options || {};
     var maxItemsPerGroup = Number(opts.maxItemsPerGroup);
     if (!isFinite(maxItemsPerGroup) || maxItemsPerGroup <= 0) maxItemsPerGroup = 0;
-    // How many empty plates the rail is willing to show. A trailing run of
-    // untouched workspaces carries no information beyond "there is somewhere
-    // free to go", so one is enough; the rest only cost rail width.
-    // -1 means no limit, 0 none at all.
-    var maxEmptyPlates = opts.showEmpty === false ? 0 : Number(opts.maxEmptyPlates);
-    if (!isFinite(maxEmptyPlates)) maxEmptyPlates = -1;
-    var emptyShown = 0;
+    // One tile per application, or one per window. Collapsing instances keeps
+    // the rail short; keeping them apart makes every window individually
+    // clickable, which is what you want when two windows of one editor are
+    // different pieces of work.
+    var groupInstances = opts.groupInstances !== false;
+
+    // Rank among the empty plates, ascending. The rail uses it to keep the
+    // lowest few - the next free workspace - and hide the rest.
+    var emptyRank = 0;
 
     var index = buildWindowWorkspaceIndex(hyprToplevels);
     var rendered = platesToRender(workspaces, opts);
@@ -342,7 +345,7 @@ function buildWorkspaceGroups(hyprToplevels, workspaces, knownWindows, activeTop
             var top = bucket[b].wayland;
             var appId = String(safeGet(top, "appId", ""));
             var entry = findEntryFor(entryList, appId);
-            var key = appKeyFor(entry, appId);
+            var key = groupInstances ? appKeyFor(entry, appId) : ("window:" + b);
             if (!byKey[key]) {
                 byKey[key] = { appId: appId, entry: entry, windows: [], addresses: [], workspaceIds: [] };
                 order.push(key);
@@ -386,18 +389,13 @@ function buildWorkspaceGroups(hyprToplevels, workspaces, knownWindows, activeTop
         realIds.sort(function (a, b) { return a - b; });
         var expectedIds = expectedRealIdsFor(id, rendered.stride, opts.screenCount);
 
-        // Plates are walked in ascending id order, so the empties that survive
-        // the cap are the lowest-numbered ones - the next free workspace,
-        // rather than an arbitrary one.
-        //
-        // The workspace being looked at right now is never dropped, however
-        // empty it is: hiding it would leave the rail with nothing marked
-        // while the user is standing on it, which reads as the dock having
-        // lost track of where they are.
-        if (items.length === 0 && !isActive && !isFocused) {
-            if (maxEmptyPlates === 0) continue;
-            if (maxEmptyPlates > 0 && emptyShown >= maxEmptyPlates) continue;
-            emptyShown++;
+        // Plates are walked in ascending id order, so emptyIndex 0 is the
+        // lowest-numbered empty plate - the next free workspace.
+        var isEmpty = items.length === 0;
+        var emptyIndex = -1;
+        if (isEmpty) {
+            emptyIndex = emptyRank;
+            emptyRank++;
         }
 
         groups.push({
@@ -412,6 +410,8 @@ function buildWorkspaceGroups(hyprToplevels, workspaces, knownWindows, activeTop
             expectedRealIds: expectedIds,
             isActive: isActive,
             isFocused: isFocused,
+            isEmpty: isEmpty,
+            emptyIndex: emptyIndex,
             isUrgent: isUrgent,
             hasFullscreen: hasFullscreen,
             monitorName: monitorName,
