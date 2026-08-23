@@ -55,7 +55,7 @@ function safeGet(obj, prop, fallback) {
 // activate()/close() and the appId, so the dock needs both halves.
 function buildWindowWorkspaceIndex(hyprToplevels) {
     var tops = toArray(hyprToplevels);
-    var index = { wayland: [], workspaceId: [], address: [], monitorName: [] };
+    var index = { wayland: [], workspaceId: [], address: [], monitorName: [], pinned: [] };
 
     for (var i = 0; i < tops.length; i++) {
         var t = tops[i];
@@ -72,6 +72,11 @@ function buildWindowWorkspaceIndex(hyprToplevels) {
         // workspace only once it has tracked it, so a window on an untracked
         // workspace would slip past a monitor filter keyed on that list.
         index.monitorName.push(mon ? String(safeGet(mon, "name", "")) : "");
+        // A pinned window is deliberately on every workspace at once, so it
+        // belongs to none of them. Hyprland exposes the flag only through the
+        // raw IPC object.
+        var ipc = safeGet(t, "lastIpcObject", null);
+        index.pinned.push(ipc ? safeGet(ipc, "pinned", false) === true : false);
     }
     return index;
 }
@@ -316,6 +321,11 @@ function buildWorkspaceGroups(hyprToplevels, workspaces, knownWindows, activeTop
     // lowest few - the next free workspace - and hide the rest.
     var emptyRank = 0;
 
+    // Pinned windows follow whichever workspace is active, so listing them on a
+    // workspace plate says something untrue: the plate they sit on changes as
+    // you move around, and the plate they left looks like it lost a window.
+    var showPinned = opts.showPinned === true;
+
     var excludedMonitors = toArray(opts.excludeMonitors);
     var scopedMonitor = String(opts.monitorName || "");
 
@@ -333,6 +343,7 @@ function buildWorkspaceGroups(hyprToplevels, workspaces, knownWindows, activeTop
         if (pos === -1) continue;
         var wsId = index.workspaceId[pos];
         if (!isNormalWorkspaceId(wsId)) continue;
+        if (!showPinned && index.pinned[pos]) continue;
         var winMonitor = index.monitorName[pos];
         if (isExcludedMonitor(excludedMonitors, winMonitor)) continue;
         if (scopedMonitor && winMonitor && winMonitor !== scopedMonitor) continue;

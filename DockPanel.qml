@@ -180,6 +180,12 @@ Item {
         function setWorkspaceScope(val: string): string { root.workspaceScope = (val === "monitor") ? "monitor" : "all"; root.saveSettings(); root.updateDockItems(); return "ok" }
         // Comma-separated monitor names, or an empty string to clear.
         function setExcludeMonitors(val: string): string { root.setExcludeMonitors(String(val || "")); return "ok" }
+        function setShowPinnedWindows(val: string): string {
+            root.showPinnedWindows = (val === "true" || val === "1")
+            root.saveSettings()
+            root.updateDockItems()
+            return "ok"
+        }
         function setGroupAppInstances(val: string): string {
             root.groupAppInstances = (val === "true" || val === "1")
             root.saveSettings()
@@ -414,6 +420,10 @@ Item {
     // One tile per application, or one per window. Off gives two windows of the
     // same editor two separate icons instead of one icon carrying a count.
     property bool groupAppInstances: true
+    // Pinned windows sit on every workspace at once, so they belong to no
+    // plate. Listing them makes the plate they happen to be over look
+    // occupied, and the one they just left look like it lost a window.
+    property bool showPinnedWindows: false
     readonly property bool showAppMenu: root.widgetsEnabled && root.dockWidgets && (root.dockWidgets.indexOf("omarchy.apps") !== -1)
     property string appMenuPosition: "left"
     property bool widgetsEnabled: true
@@ -648,6 +658,9 @@ Item {
                 if (s.excludeUndockedMonitors !== undefined) {
                     root.excludeUndockedMonitors = (s.excludeUndockedMonitors === true)
                 }
+                if (s.showPinnedWindows !== undefined) {
+                    root.showPinnedWindows = (s.showPinnedWindows === true)
+                }
                 if (s.groupAppInstances !== undefined) {
                     root.groupAppInstances = (s.groupAppInstances === true)
                 }
@@ -699,6 +712,7 @@ Item {
             excludeUndockedMonitors: root.excludeUndockedMonitors,
             workspaceStride: root.workspaceStride,
             groupAppInstances: root.groupAppInstances,
+            showPinnedWindows: root.showPinnedWindows,
             widgetsEnabled: root.widgetsEnabled,
             appMenuPosition: root.appMenuPosition || "left",
             widgetPosition: root.widgetPosition || "right",
@@ -1051,6 +1065,7 @@ Item {
     onExcludeMonitorsChanged: root.updateDockItems()
     onWorkspaceStrideChanged: root.updateDockItems()
     onGroupAppInstancesChanged: root.updateDockItems()
+    onShowPinnedWindowsChanged: root.updateDockItems()
     onMaxEmptyWorkspacesChanged: root.updateDockItems()
 
     // Turn the dock on or off for one screen. Named rather than indexed so the
@@ -1752,6 +1767,7 @@ Item {
                     excludeMonitors: root.effectiveExcludedMonitors,
                     stride: root.workspaceStride,
                     groupInstances: root.groupAppInstances,
+                    showPinned: root.showPinnedWindows,
                     screenCount: (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values.length : 1,
                     maxItemsPerGroup: 0
                 })

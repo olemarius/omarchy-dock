@@ -82,6 +82,7 @@ You can customize options directly via the `···` status bar widget or in `~/.
   "excludeMonitors": [],
   "maxEmptyWorkspaces": 1,
   "groupAppInstances": true,
+  "showPinnedWindows": false,
   "workspaceStride": 0
 }
 ```
@@ -105,6 +106,7 @@ omarchy-shell rosakodu.dock setExcludeUndockedMonitors false
 | `maxEmptyWorkspaces` | `1` | How many empty plates to keep at rest — while a tile is being dragged the rail reveals its empty workspaces regardless, both the gaps between occupied ones and one past the last, so a window can be dropped onto a workspace nothing lives on yet. A trailing run of untouched workspaces says nothing beyond "there is somewhere free to go", so one is shown and the rest dropped; `-1` shows them all. The workspace you are currently viewing always keeps its plate, however empty. |
 | `paddedWorkspaceCount` | `5` | How many numbered workspaces are always shown when `showEmptyWorkspaces` is on. |
 | `workspaceScope` | `"all"` | `"all"` shows every workspace; `"monitor"` restricts the rail to workspaces on the dock's own monitor. |
+| `showPinnedWindows` | `false` | Pinned windows are deliberately on every workspace at once, so they belong to no plate. Listing one makes whichever plate it is currently over look occupied, and the plate it just left look like it lost a window — which reads as groups disappearing as you move between workspaces. Set `true` to list them anyway. |
 | `groupAppInstances` | `true` | One tile per application. Turn it off to give every window its own icon, so two windows of the same editor are two separate targets rather than one icon carrying a count. |
 | `workspaceStride` | `0` | Spanning workspaces. Hyprland cannot put one workspace on two monitors, so multi-monitor setups often pair them by offset — workspace 2 on the main screen and 12 on the second being two halves of one idea. Set this to that offset (usually `10`) and each plate represents the pair: it shows the windows of both halves, clicking it switches every screen at once, and dragging a tile onto it keeps each window on the screen it is already on. `0` gives one plate per workspace. |
 | `excludeMonitors` | `[]` | Monitor names whose workspaces are left off the rail entirely, e.g. `["eDP-1"]` to ignore the laptop screen while docked. Excluded workspaces are not padded back as empty plates. Workspaces the compositor has never opened have no monitor yet, so they still appear — set `showEmptyWorkspaces` to `false` for a rail of only what exists. |
