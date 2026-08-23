@@ -1240,7 +1240,12 @@ Item {
     // Coalescing debounce timer to prevent signal storm while keeping UI instantaneous
     Timer {
         id: batchUpdateTimer
-        interval: 16
+        // A single workspace switch emits a burst of Hyprland events, and the
+        // intermediate ones carry half-updated window positions - a window is
+        // briefly attributed to the workspace being left. Rebuilding on each
+        // one makes tiles hop between plates. Coalescing past the burst means
+        // the rail is only ever drawn from settled state.
+        interval: 90
         repeat: false
         onTriggered: root.doUpdateDockItems()
     }
@@ -1725,6 +1730,12 @@ Item {
                 : (lib && typeof lib.sortedEntries === "function" ? lib.sortedEntries("") : root.appRows)
             var hyprTops = (Hyprland.toplevels && Hyprland.toplevels.values) ? Hyprland.toplevels.values : []
             var wsList = (Hyprland.workspaces && Hyprland.workspaces.values) ? Hyprland.workspaces.values : []
+
+            // Hyprland's toplevel list is repopulated asynchronously, and a
+            // rebuild landing in that gap sees no windows at all. Publishing
+            // that empties every plate for a frame, which reads as the rail
+            // losing its contents at random. Keep the last good answer instead.
+            if (hyprTops.length === 0 && root.knownWindows.length > 0) return
 
             view.workspaceGroups = WorkspaceModel.buildWorkspaceGroups(
                 hyprTops,

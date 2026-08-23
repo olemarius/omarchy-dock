@@ -55,7 +55,7 @@ function safeGet(obj, prop, fallback) {
 // activate()/close() and the appId, so the dock needs both halves.
 function buildWindowWorkspaceIndex(hyprToplevels) {
     var tops = toArray(hyprToplevels);
-    var index = { wayland: [], workspaceId: [], address: [] };
+    var index = { wayland: [], workspaceId: [], address: [], monitorName: [] };
 
     for (var i = 0; i < tops.length; i++) {
         var t = tops[i];
@@ -63,9 +63,15 @@ function buildWindowWorkspaceIndex(hyprToplevels) {
         var wl = safeGet(t, "wayland", null);
         if (!wl) continue;
         var ws = safeGet(t, "workspace", null);
+        var mon = safeGet(t, "monitor", null);
         index.wayland.push(wl);
         index.workspaceId.push(ws ? Number(safeGet(ws, "id", -1)) : -1);
         index.address.push(normalizeAddress(safeGet(t, "address", "")));
+        // Taken from the window itself rather than looked up through the
+        // workspace list, which is not always complete: Hyprland reports a
+        // workspace only once it has tracked it, so a window on an untracked
+        // workspace would slip past a monitor filter keyed on that list.
+        index.monitorName.push(mon ? String(safeGet(mon, "name", "")) : "");
     }
     return index;
 }
@@ -310,6 +316,9 @@ function buildWorkspaceGroups(hyprToplevels, workspaces, knownWindows, activeTop
     // lowest few - the next free workspace - and hide the rest.
     var emptyRank = 0;
 
+    var excludedMonitors = toArray(opts.excludeMonitors);
+    var scopedMonitor = String(opts.monitorName || "");
+
     var index = buildWindowWorkspaceIndex(hyprToplevels);
     var rendered = platesToRender(workspaces, opts);
     var windows = toArray(knownWindows);
@@ -324,12 +333,33 @@ function buildWorkspaceGroups(hyprToplevels, workspaces, knownWindows, activeTop
         if (pos === -1) continue;
         var wsId = index.workspaceId[pos];
         if (!isNormalWorkspaceId(wsId)) continue;
+        var winMonitor = index.monitorName[pos];
+        if (isExcludedMonitor(excludedMonitors, winMonitor)) continue;
+        if (scopedMonitor && winMonitor && winMonitor !== scopedMonitor) continue;
         if (rendered.filtered[wsId]) continue;
         var bucketPlate = plateIdFor(wsId, rendered.stride, rendered.plateCount);
         if (bucketPlate < 1) continue;
         if (!buckets[bucketPlate]) buckets[bucketPlate] = [];
         buckets[bucketPlate].push({ wayland: win, address: index.address[pos], workspaceId: wsId });
     }
+
+    // A plate that holds windows is always rendered, whatever the workspace
+    // list said a moment ago.
+    //
+    // Plates are chosen from the workspaces Hyprland reported, but windows are
+    // bucketed independently - so a plate whose only *seen* workspace was
+    // filtered out (an excluded monitor, or a list that churned mid-refresh)
+    // could be dropped while still holding windows, and a group with content
+    // would vanish from the rail for no reason the user could see.
+    for (var plateKey in buckets) {
+        var bucketId = Number(plateKey);
+        if (!isFinite(bucketId) || bucketId < 1) continue;
+        if (buckets[plateKey].length === 0) continue;
+        if (rendered.ids.indexOf(bucketId) !== -1) continue;
+        rendered.ids.push(bucketId);
+        if (!rendered.members[bucketId]) rendered.members[bucketId] = [];
+    }
+    rendered.ids.sort(function (a, b) { return a - b; });
 
     var groups = [];
     for (var i = 0; i < rendered.ids.length; i++) {
