@@ -962,14 +962,30 @@ Item {
         }
         var id = Number(groupData.workspaceId)
         if (!isFinite(id) || id <= 0) return
+        // Hyprland configured in Lua (Omarchy's default) no longer parses the
+        // legacy `workspace N` dispatcher, so the form has to match the config
+        // language the compositor reports.
         try {
-            Hyprland.dispatch("workspace " + id)
+            if (Hyprland.usingLua === true) {
+                Hyprland.dispatch("hl.dsp.focus({ workspace = \"" + id + "\" })")
+            } else {
+                Hyprland.dispatch("workspace " + id)
+            }
         } catch (e) {
-            Util.execDetached("hyprctl dispatch workspace " + id)
+            Util.execDetached("hyprctl dispatch " + Util.shellQuote("hl.dsp.focus({ workspace = \"" + id + "\" })")
+                + " || hyprctl dispatch workspace " + id)
         }
     }
 
     onGroupByWorkspaceChanged: {
+        // Quickshell populates the Hyprland toplevel list lazily; ask for it
+        // explicitly the moment the grouped rail starts depending on it.
+        if (root.groupByWorkspace) {
+            try {
+                Hyprland.refreshToplevels()
+                Hyprland.refreshWorkspaces()
+            } catch (e) {}
+        }
         root.activeStackItem = null
         root.activeMenuItem = null
         root.isEditMode = false
@@ -1977,8 +1993,6 @@ Item {
                     y: root.isVertical ? railBaseOffset : 0
                     z: 1
                     sourceComponent: root.isVertical ? verticalRailComponent : horizontalRailComponent
-                    implicitWidth: item ? item.implicitWidth : 0
-                    implicitHeight: item ? item.implicitHeight : 0
                 }
 
                 Component {

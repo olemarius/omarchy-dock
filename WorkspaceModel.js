@@ -20,11 +20,23 @@ function isNormalWorkspaceId(id) {
     return isFinite(n) && n > 0;
 }
 
+// Quickshell hands out its model contents as array-*like* objects rather than
+// true Arrays, so Array.isArray() is not enough to recognise a window list.
+//
+// Order matters here: an array-like inherits Array.prototype.values (an
+// iterator *function*), so probing `.values` before length would follow that
+// function instead of the contents and quietly yield nothing.
 function toArray(list) {
     if (!list) return [];
     if (Array.isArray(list)) return list;
+    if (typeof list.length === "number") {
+        var out = [];
+        for (var i = 0; i < list.length; i++) out.push(list[i]);
+        return out;
+    }
+    // A model object rather than its contents: unwrap it once.
     try {
-        if (list.values && Array.isArray(list.values)) return list.values;
+        if (list.values && typeof list.values !== "function") return toArray(list.values);
     } catch (e) {}
     return [];
 }
