@@ -393,6 +393,25 @@ Item {
     property int maxEmptyWorkspaces: 1
 
     // Empty plates the rail keeps at rest. -1 keeps them all; 0 keeps none.
+    // Screens in the order a spanning setup assigns workspace blocks to them:
+    // external monitors first, the built-in panel last. Mirrors the ordering
+    // the compositor config uses, so block 0 is workspaces 1-10 on the main
+    // screen, block 1 is 11-20 on the next, and so on.
+    readonly property var orderedScreenNames: {
+        var externals = []
+        var internals = []
+        var screens = Quickshell.screens
+        for (var i = 0; i < screens.length; i++) {
+            var name = String(screens[i].name || "")
+            if (!name) continue
+            if (name.indexOf("eDP") === 0 || name.indexOf("LVDS") === 0 || name.indexOf("DSI") === 0) internals.push(name)
+            else externals.push(name)
+        }
+        externals.sort()
+        internals.sort()
+        return externals.concat(internals)
+    }
+
     readonly property int emptyPlateAllowance: root.showEmptyWorkspaces ? root.maxEmptyWorkspaces : 0
     property int paddedWorkspaceCount: 5
     // "all" shows every workspace; "monitor" restricts the rail to workspaces
@@ -1766,6 +1785,7 @@ Item {
                     monitorName: (root.workspaceScope === "monitor") ? view.dockMonitorName : "",
                     excludeMonitors: root.effectiveExcludedMonitors,
                     stride: root.workspaceStride,
+                    screenOrder: root.orderedScreenNames,
                     groupInstances: root.groupAppInstances,
                     showPinned: root.showPinnedWindows,
                     screenCount: (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values.length : 1,

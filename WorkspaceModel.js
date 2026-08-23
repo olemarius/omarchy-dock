@@ -179,6 +179,28 @@ function buildAppItem(appId, entry, windows, addresses, workspaceIds, activeTopl
     };
 }
 
+// Which screen a workspace belongs to, derived from its number.
+//
+// This is the only trustworthy answer on a spanning setup. Hyprland itself
+// keeps workspaces pinned correctly, but the compositor bindings hand back a
+// workspace's monitor as the *focused* screen after a switch - so with the
+// pointer on the laptop, the external monitor's workspaces are reported as
+// living on the laptop, and every window on them gets filtered away.
+//
+// The numbering is deterministic: with a stride of 10, workspaces 1-10 are the
+// first screen's block, 11-20 the second's. `screenOrder` lists the screens in
+// the same order the compositor config assigns those blocks.
+function monitorForWorkspace(workspaceId, stride, screenOrder) {
+    if (!stride || stride <= 0) return "";
+    var order = toArray(screenOrder);
+    if (order.length === 0) return "";
+    var id = Number(workspaceId);
+    if (!isFinite(id) || id < 1) return "";
+    var block = Math.floor((id - 1) / stride);
+    if (block < 0 || block >= order.length) return "";
+    return String(order[block] || "");
+}
+
 function isExcludedMonitor(excluded, monitorName) {
     if (!excluded || excluded.length === 0) return false;
     var name = String(monitorName || "");
@@ -251,8 +273,9 @@ function platesToRender(workspaces, options) {
         if (plate < 1) continue;
         seen[id] = true;
 
+        var derivedName = monitorForWorkspace(id, stride, opts.screenOrder);
         var mon = safeGet(ws, "monitor", null);
-        var monName = mon ? String(safeGet(mon, "name", "")) : "";
+        var monName = derivedName || (mon ? String(safeGet(mon, "name", "")) : "");
         if (isExcludedMonitor(excluded, monName) || (monitorName && monName !== monitorName)) {
             if (!members[plate]) suppressed[plate] = true;
             filtered[id] = true;
@@ -356,7 +379,11 @@ function buildWorkspaceGroups(hyprToplevels, workspaces, knownWindows, activeTop
         // the rail whenever focus sat on an excluded monitor. So the window's
         // monitor is consulted only for workspaces the compositor has not
         // reported, where nothing better exists.
-        if (rendered.seen[wsId]) {
+        var derivedMonitor = monitorForWorkspace(wsId, rendered.stride, opts.screenOrder);
+        if (derivedMonitor) {
+            if (isExcludedMonitor(excludedMonitors, derivedMonitor)) continue;
+            if (scopedMonitor && derivedMonitor !== scopedMonitor) continue;
+        } else if (rendered.seen[wsId]) {
             if (rendered.filtered[wsId]) continue;
         } else {
             var winMonitor = index.monitorName[pos];
