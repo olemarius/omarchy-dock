@@ -329,12 +329,12 @@ Item {
         }
     }
 
-    // 0. iOS / macOS-Style Theme Notification Badge with Count (Anchored to top-right of iconWrapper)
+    // 0. Unread dot, sitting on the icon's top-right corner
     NotificationBadge {
         anchors.top: iconWrapper.top
-        anchors.topMargin: -4
+        anchors.topMargin: -2
         anchors.right: iconWrapper.right
-        anchors.rightMargin: -4
+        anchors.rightMargin: -2
         count: root.badgeCount
         hasUrgent: (root.itemData && !!root.itemData.hasUrgent)
         isSuppressed: root.isEditMode || root.isAnyDragging || !root.showBadges

@@ -435,14 +435,13 @@ PanelWindow {
                                     antialiasing: true
                                 }
 
-                                // iOS-Style Theme Notification Badge on Sub-App (Modular)
+                                // Unread dot on a sub-app inside a folder
                                 NotificationBadge {
                                     anchors.top: parent.top
-                                    anchors.topMargin: -3
+                                    anchors.topMargin: -1
                                     anchors.right: parent.right
-                                    anchors.rightMargin: -3
-                                    badgeHeight: 16
-                                    badgeFontSize: 9
+                                    anchors.rightMargin: -1
+                                    dotSize: 7
                                     count: (modelData && modelData.badgeCount) ? modelData.badgeCount : 0
                                     hasUrgent: (modelData && !!modelData.hasUrgent)
                                     isSuppressed: stackWindow.root.isEditMode || stackWindow.root.folderDragActiveIndex >= 0 || !stackWindow.root.showBadges
