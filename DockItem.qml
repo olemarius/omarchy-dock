@@ -50,14 +50,15 @@ Item {
     signal workspaceDragCanceled()
 
     readonly property int badgeCount: (root.itemData && typeof root.itemData.badgeCount === "number") ? root.itemData.badgeCount : 0
-    property int lastBadgeCount: 0
 
-    onBadgeCountChanged: {
-        if (badgeCount > lastBadgeCount && badgeCount > 0) {
-            clickEffectAnim.restart()
-        }
-        lastBadgeCount = badgeCount
-    }
+    // A rising badge used to replay the press animation, as a "something
+    // arrived" cue. It could not work: the rail's tiles are rebuilt whenever
+    // the model changes, and a fresh tile counts the badge it is born with as
+    // a rise from zero. So every rebuild - including the one a pointer moving
+    // between screens triggers - set every badged icon bouncing, while an
+    // actual new notification arriving alongside a rebuild was silent. The
+    // press animation stays on the gestures that mean something: click,
+    // launch, and spawning another window.
 
     readonly property bool isVertical: barPosition === "left" || barPosition === "right"
 
